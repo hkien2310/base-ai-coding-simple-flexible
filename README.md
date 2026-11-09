@@ -37,6 +37,20 @@ base-ai-coding-simple-flexible/
 
 ---
 
+## Recommended Companion Skills & MCP Servers
+
+The harness works out of the box with **zero external dependencies** (its core rules and `git grep` fallbacks are baked directly into `AGENTS.md` and `check-blast-radius.py`), but automatically upgrades its capabilities when these companion skills/MCPs are installed:
+
+| Skill / MCP | Role in Harness | Built-in Fallback (If Not Installed) |
+| :--- | :--- | :--- |
+| **`ponytail`** *(Skill)* | Enforces the 7-rung simplicity ladder (YAGNI → reuse existing → stdlib → native → installed dep → 1-liner → minimal code) and `ponytail-review`. | Core 7-rung ladder is embedded directly in `AGENTS.md`. |
+| **`adversarial-verifier`** *(Skill)* | Eliminates sycophancy, stress-tests architecture proposals, and triages review issues into `[FATAL]` vs `[HIGH RISK]`. | Adversarial review prompt & risk triage rules are baked into `AGENTS.md` Mode 2. |
+| **`code-review-graph`** *(MCP / CLI)* | Builds `.code-review-graph/graph.db` (Tree-sitter + SQLite) for instant AST caller/callee impact radius (`get_impact_radius_tool`, `get_review_context_tool`). | `.context/check-blast-radius.py` automatically falls back to `git diff` + `git grep`. |
+| **`chrome-devtools` / Playwright** *(MCP)* | Live browser verification (`list_console_messages`, `list_network_requests`, DOM snapshot) at the End-of-Turn check. | E2E test runner command / `curl` checks defined in `.context/project.md`. |
+| **`humanizer` / `stop-slop`** *(Skill)* | Strips AI writing patterns from documentation, UI copy, and commit messages. | Anti-slop rules embedded in `AGENTS.md`. |
+
+---
+
 ## Quick Start
 
 ```bash

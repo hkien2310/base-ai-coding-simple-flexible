@@ -19,9 +19,28 @@ This harness is platform-agnostic (Antigravity, Claude Code, OpenCode, Codex, Cu
 | :--- | :--- | :--- | :--- | :--- |
 | **Ask Clarifying Questions** | `ask_question` tool (or `/grill-me`) | `AskUserQuestion` tool | Numbered multiple-choice text in chat | Numbered multiple-choice text in chat |
 | **Read-Only Codebase Scan** | `invoke_subagent(TypeName: "research")` | `Task(subagent_type: "Explore")` | `@explore` subagent or direct `ripgrep` | Direct search & file reads |
+| **Call Graph & Impact Analysis** | `code-review-graph` MCP (`build_or_update_graph_tool`, `get_impact_radius_tool`, `get_review_context_tool`) | `code-review-graph` MCP or `.context/check-blast-radius.py` | `.context/check-blast-radius.py` | `.context/check-blast-radius.py` (`git grep` fallback) |
 | **Parallel Isolated Task** | `invoke_subagent(TypeName: "self", Workspace: "share")` (or `/teamwork`) | `Task` subagent with `git worktree` | Parallel subagent / `git worktree` | Execute tasks sequentially on current branch |
-| **Independent Code Review** | Fresh `self` or `research` subagent | Fresh `Task` subagent | `@reviewer` subagent | Self-audit `git diff` against checklist |
+| **Independent Code Review** | Fresh `self` or `research` subagent + `adversarial-verifier` skill | Fresh `Task` subagent + `adversarial-verifier` | `@reviewer` subagent | Self-audit `git diff` against checklist |
 | **Browser / UI Verification** | `chrome-devtools` MCP (`list_console_messages`, `list_network_requests`) | `chrome-devtools` / Playwright MCP or CLI | Playwright / headless browser CLI | `curl` / E2E test runner command |
+
+---
+
+## Core Operating Principles & Companion Skills
+
+Always activate these skills if installed in the runtime; if not installed, enforce their core rules directly below:
+
+1. **`ponytail` (Lazy Senior Dev Mode — Mandatory on All Code):**
+   - Stop at the first rung that holds before writing code: **(1) YAGNI** (does this need to exist?) → **(2) Reuse existing codebase helper/pattern** → **(3) Standard library** → **(4) Native platform feature** → **(5) Already-installed dependency** → **(6) One-liner** → **(7) Minimum code that works**.
+   - Deletion over addition. Boring over clever. Fewest files possible. No speculative abstractions or unrequested dependencies.
+   - Bug fix = root cause, never symptom. Grep every caller and fix the shared function once.
+2. **`adversarial-verifier` (Zero Sycophancy & Strict Risk Triage):**
+   - Treat every requirement, architecture claim, and "passing" diff as an unproven hypothesis.
+   - Challenge flawed premises before writing code. Triage findings strictly into `[FATAL]` (blocks completion) vs `[HIGH RISK]` (requires explicit mitigation).
+3. **`code-review-graph` (Structural Call-Graph Intelligence):**
+   - Prefer `code-review-graph` MCP tools (`build_or_update_graph_tool`, `get_impact_radius_tool`, `get_review_context_tool`, `detect_changes_tool`) alongside `.context/check-blast-radius.py` to trace callers, callees, and test coverage before and after edits.
+4. **`humanizer` & `stop-slop` (Clean Technical & UI Prose):**
+   - Strip AI writing tells ("not X, but Y", throat-clearing openers, inflated corporate adverbs) from documentation, UI copy, PR descriptions, and commit messages.
 
 ---
 
