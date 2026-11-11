@@ -177,3 +177,8 @@ AI agents frequently cheat at testing by writing tests that merely confirm buggy
    - **No Global Destructive Git Commands:** Never run `git checkout .`, `git reset --hard`, `git stash`, or `git add .` — always stage only your own touched files (`git add <exact-files>`).
    - **Scoped Gatekeeper:** Scope gatekeeper checks to your session's work via `VERIFY_FILES="<your-files>" VERIFY_SPEC="<your-slug-or-None>" ./.context/verify-gate.sh`.
 8. **Escape Hatch:** If the user says `"fast"` / `"chỉ làm thôi"` / `"just execute"`, bypass Spec Lane human approval checkpoints and execute directly while still enforcing `./.context/verify-gate.sh` and the Test Quality Gate.
+9. **Governance Change Log (Rule & Key Doc Changes — Every Lane, No Exceptions):**
+   - **Scope:** `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.agents/**`, `.claude/**`, `.cursor/rules/**`, `.context/project.md`, plus every path listed in `GOVERNANCE_DOCS` in `.context/project.md` (workflow / craft / review / style / contract docs).
+   - **When:** In the same turn you edit any file in scope (even a 1-line Fast Lane tweak), append one entry to `.context/changes/rules-log.md` (create it if missing; newest entry at the bottom; never rewrite old entries):
+     `- [YYYY-MM-DD HH:MM] <file(s)> — <what changed> | Why: <user request / incident> | Replaces: <old rule or None>`
+   - **Before editing a governance doc:** read the last 10 entries of `rules-log.md` so you do not silently revert a rule the user deliberately set.

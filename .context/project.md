@@ -13,6 +13,7 @@ STATUS: UNINITIALIZED
 - **Cross-Repo Consumers:**
   - **CROSS_REPO_CONSUMERS**: ``
   - **CONTRACT_DOC**: ``
+- **GOVERNANCE_DOCS** (key workflow/rule docs; edits must be logged in `.context/changes/rules-log.md`): `TBD`
 - **Call Graph Index:** `.code-review-graph/graph.db` (Priority 1 SQLite query; automated fallback to git diff + git grep when absent)
 
 ## 3. Verification Commands & Lane Router (Single Source of Truth)
