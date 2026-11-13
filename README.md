@@ -14,7 +14,7 @@ A minimal, zero-dependency project harness for AI coding agents (**Antigravity, 
    - **Start-of-Session:** Automatically archives previous `READY` tasks into `Recently Completed` when you move on to a new task, or resumes an active row without stepping on concurrent sessions.
    - **End-of-Turn:** Runs the mechanical gatekeeper + live E2E verification (DB/API/Browser), then parks the task row as `READY` so you can still request follow-up tweaks before it closes.
 5. **Governance Change Log:**
-   - Any edit to `AGENTS.md`, `CLAUDE.md`, `.agents/**`, `.context/project.md`, or docs listed in `GOVERNANCE_DOCS` gets a one-line entry in `.context/changes/rules-log.md` (what changed, why, what it replaced), in every lane. Agents read the latest entries before touching rules, so deliberate decisions don't get silently reverted.
+   - Any edit to `AGENTS.md`, `CLAUDE.md`, `.agents/**`, `.context/project.md`, or docs listed in `GOVERNANCE_DOCS` gets a one-line entry at the top of `.context/changes/rules-log.md` (what changed, why, what it replaced), in every lane. Agents read the latest entries before touching rules, so deliberate decisions don't get silently reverted.
 6. **Mechanical Anti-Cheat Gatekeeper (`verify-gate.sh` & `check-blast-radius.py`):**
    - Blocks `.skip`, `.only`, `@Disabled`, empty `catch {}` blocks, and unauthorized test assertion deletions in `git diff`.
    - Traces caller blast radius via `.code-review-graph/graph.db` (SQLite) with automatic fallback to `git diff` + `git grep`, plus cross-repo consumer scanning.
@@ -35,7 +35,7 @@ base-ai-coding-simple-flexible/
     ├── check-blast-radius.py      # Dual-engine caller impact analyzer (SQLite Call Graph + Git Grep)
     └── changes/
         ├── _TEMPLATE.md           # Delta Spec + Spec-to-Test Contract + Cross-Repo Impact Matrix
-        └── rules-log.md           # Append-only log of every rule / key-doc change (what, why, what it replaced)
+        └── rules-log.md           # Reverse-chronological log (newest at top) of every rule / key-doc change
 ```
 
 ---
