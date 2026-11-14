@@ -27,7 +27,7 @@ A minimal, zero-dependency project harness for AI coding agents (**Antigravity, 
 base-ai-coding-simple-flexible/
 ├── AGENTS.md                      # 2-Lane Router (Fast vs Spec Lane) + 2-End Lifecycle + 5 Test Laws
 ├── CLAUDE.md -> AGENTS.md         # Symlink for Claude Code compatibility
-├── inject.sh                      # 1-command installer (Stealth / Track / Force modes)
+├── inject.sh                      # 1-command installer (Stealth / Upgrade / Track / Force modes)
 └── .context/
     ├── project.md                 # Project map: Stack, VERIFY_CMD, Runtime Sandbox, Error Memory
     ├── state.md                   # Concurrent multi-session state table (< 30 lines)
@@ -55,18 +55,33 @@ The harness works out of the box with **zero external dependencies** (its core r
 
 ---
 
-## Quick Start
+## Injecting into Any Project
+
+### Option A — Terminal (1 Command)
 
 ```bash
-# 1. Clone the harness
-git clone https://github.com/hkien2310/base-ai-coding-simple-flexible.git
+# 1. Clone once anywhere on your machine
+git clone https://github.com/hkien2310/base-ai-coding-simple-flexible.git ~/coding-base
 
-# 2. Inject into any target repository (Default: Stealth Mode + Coexistence)
-./base-ai-coding-simple-flexible/inject.sh /path/to/your-project
+# 2. Inject into any existing or empty project (Default: Stealth + Coexistence)
+~/coding-base/inject.sh /path/to/your-project
+```
 
-# Optional flags:
-# ./inject.sh /path/to/your-project --track   # Track harness files in Git
-# ./inject.sh /path/to/your-project --force   # Overwrite existing harness files with latest version
+| Flag | Behavior |
+| :--- | :--- |
+| *(no flag)* | **Stealth + Coexistence (Default):** Keeps existing `AGENTS.md`/`CLAUDE.md` untouched (installs `.agents/rules/coding-base.md` alongside them) and hides all harness files in `.git/info/exclude`. |
+| `--upgrade` | **Safe Engine Update:** Updates harness engine files (`AGENTS.md` / `coding-base.md`, `verify-gate.sh`, `check-blast-radius.py`, `_TEMPLATE.md`) while **preserving** your onboarded `.context/project.md`, `.context/state.md`, and custom project rules. |
+| `--track` | **Git-Tracked Mode:** Skips `.git/info/exclude` so you can commit the harness directly into your repository. |
+| `--force` | **Factory Reset:** Resets `.context/project.md` and `.context/state.md` back to blank templates (still never overwrites custom project `AGENTS.md`/`CLAUDE.md`). |
+
+> **Note for non-Git folders:** You can inject into an empty folder before running `git init`. Once you run `git init` later, re-run `~/coding-base/inject.sh /path/to/your-project` so `.git/info/exclude` and the `pre-commit` gatekeeper hook are wired up automatically.
+
+### Option B — Ask Your AI Agent Directly
+
+Paste this single prompt into Antigravity, Claude Code, Cursor, or Codex inside any target project:
+
+```text
+Clone https://github.com/hkien2310/base-ai-coding-simple-flexible.git to ~/coding-base (or git pull if already cloned), run ~/coding-base/inject.sh on this workspace, and onboard .context/project.md.
 ```
 
 ---
