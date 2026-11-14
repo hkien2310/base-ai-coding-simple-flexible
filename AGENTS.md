@@ -41,6 +41,8 @@ Always activate these skills if installed in the runtime; if not installed, enfo
    - Prefer `code-review-graph` MCP tools (`build_or_update_graph_tool`, `get_impact_radius_tool`, `get_review_context_tool`, `detect_changes_tool`) alongside `.context/check-blast-radius.py` to trace callers, callees, and test coverage before and after edits.
 4. **`humanizer` & `stop-slop` (Clean Technical & UI Prose):**
    - Strip AI writing tells ("not X, but Y", throat-clearing openers, inflated corporate adverbs) from documentation, UI copy, PR descriptions, and commit messages.
+5. **`modern-web-guidance` (Frontend / Web Platform Tasks Only):**
+   - On HTML, CSS, or client-side browser UI tasks, query `modern-web-guidance` first (if installed) and prefer Baseline native Web APIs (`<dialog>`, Popover, CSS Anchor Positioning, `:user-invalid`, `field-sizing`, View Transitions) over custom JS workarounds or extra npm packages (Ponytail Rung 4). Skip completely on backend, CLI, infra, or content-only tasks.
 
 ---
 
@@ -115,7 +117,7 @@ When a task enters **Spec Lane**:
 3. **Adversarial Code & Test Review (Before Final Report):**
    - Run `./.context/verify-gate.sh` on the integrated branch.
    - Run **Independent Code Review** with prompt:
-     *"Audit `git diff` against `.context/changes/<slug>.md` and `.context/project.md`. Check: (1) Every `TC-xx` in the Spec Contract has a real, non-trivial test; (2) No banned fake-test patterns exist (see Test Quality Gate in `AGENTS.md`); (3) Horizontal domain coupling completeness: counterpart parity (`create` vs `update`), DTO/mapper pipeline integrity without silent omissions, import/export template/index synchronicity, and legacy null-safety; (4) Cross-repo consumer compatibility across sibling frontend repos (`CROSS_REPO_CONSUMERS`) and verification that contract documentation (`CONTRACT_DOC`) is updated in sync with code changes without breaking consumer contracts; (5) No regressions, security holes, or unnecessary bloat. Report `[FATAL]` and `[HIGH RISK]` issues only."*
+     *"Audit the full changeset against `.context/changes/<slug>.md` and `.context/project.md`. First run `git diff --name-status` (plus any new untracked target files) to build a complete file checklist and inspect **every changed file individually** — never skim a combined diff or skip files on large changesets (must report `Reviewed: N/N files`). Check: (1) Every `TC-xx` in the Spec Contract has a real, non-trivial test; (2) No banned fake-test patterns exist (see Test Quality Gate in `AGENTS.md`); (3) Horizontal domain coupling completeness: counterpart parity (`create` vs `update`), DTO/mapper pipeline integrity without silent omissions, import/export template/index synchronicity, and legacy null-safety; (4) Cross-repo consumer compatibility across sibling frontend repos (`CROSS_REPO_CONSUMERS`) and verification that contract documentation (`CONTRACT_DOC`) is updated in sync with code changes without breaking consumer contracts; (5) Runtime & logic defect scan: zero DB/API calls inside loops (N+1), zero race conditions or unsafe shared mutable state, zero unguarded null/undefined dereferences, no regressions, security holes, or unnecessary bloat. Report `Reviewed: N/N files` plus `[FATAL]` and `[HIGH RISK]` issues only."*
    - Fix any `[FATAL]` / `[HIGH RISK]` findings and re-run `./.context/verify-gate.sh`.
    - Update `.context/state.md` (and append any new traps to `.context/project.md` under `## Error Memory & Red Lines`).
 

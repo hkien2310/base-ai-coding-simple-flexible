@@ -51,6 +51,7 @@ The harness works out of the box with **zero external dependencies** (its core r
 | **`code-review-graph`** *(MCP / CLI)* | Builds `.code-review-graph/graph.db` (Tree-sitter + SQLite) for instant AST caller/callee impact radius (`get_impact_radius_tool`, `get_review_context_tool`). | `.context/check-blast-radius.py` automatically falls back to `git diff` + `git grep`. |
 | **`chrome-devtools` / Playwright** *(MCP)* | Live browser verification (`list_console_messages`, `list_network_requests`, DOM snapshot) at the End-of-Turn check. | E2E test runner command / `curl` checks defined in `.context/project.md`. |
 | **`humanizer` / `stop-slop`** *(Skill)* | Strips AI writing patterns from documentation, UI copy, and commit messages. | Anti-slop rules embedded in `AGENTS.md`. |
+| **`modern-web-guidance`** *(Skill / CLI)* | Queries Baseline modern Web Platform APIs (`<dialog>`, Popover, Anchor Positioning, View Transitions) on HTML/CSS/UI tasks before writing JS workarounds (skipped on backend/CLI tasks). | Native-platform-first rule (Ponytail Rung 4) embedded in `AGENTS.md`. |
 
 ---
 
