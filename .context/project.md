@@ -12,4 +12,4 @@ STATUS: UNINITIALIZED
 - **Live / Manual Check:** `<API curl / browser / asset & schema check>`
 
 ## Error Memory & Red Lines
-- [ ] Always run `./.context/verify-gate.sh` before finishing any task.
+- None yet (append 1 line per real pitfall or user correction).

@@ -1,416 +1,233 @@
 #!/usr/bin/env bash
 set -euo pipefail
+exec python3 - <<'PY'
+import datetime, fnmatch, glob, os, re, subprocess, sys
 
-# 3-Step Mechanical Quality & Anti-Cheat Gatekeeper
-# Checks diff/untracked tests & active plans, governance log sync, and project VERIFY_CMD.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+RED, GREEN, YELLOW, NC = "\033[0;31m", "\033[0;32m", "\033[1;33m", "\033[0m"
+BT = chr(96)
+failed = False
 
-FAILED=0
-
-IS_GIT=0
-HAS_HEAD=0
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  IS_GIT=1
-  if git rev-parse --verify HEAD >/dev/null 2>&1; then
-    HAS_HEAD=1
-  fi
-fi
-
-SCOPED_FILES=""
-if [[ "$IS_GIT" -eq 1 ]]; then
-  RAW_CHANGED=$(
-    {
-      if [[ "$HAS_HEAD" -eq 1 ]]; then
-        git diff HEAD --name-only 2>/dev/null || true
-      else
-        git diff --name-only 2>/dev/null || true
-        git diff --cached --name-only 2>/dev/null || true
-      fi
-      git ls-files --others --exclude-standard 2>/dev/null || true
-    } | awk 'NF' | sort -u
-  )
-  if [[ -n "${VERIFY_FILES:-}" ]]; then
-    SCOPED_FILES=$(RAW_CHANGED="$RAW_CHANGED" python3 - <<'PY'
-import os, re
-raw = [ln.strip() for ln in os.environ.get("RAW_CHANGED", "").splitlines() if ln.strip()]
-scoped = {re.sub(r"^\./+", "", f.strip()) for f in re.split(r"[\s,]+", os.environ.get("VERIFY_FILES", "").strip()) if f.strip()}
-print("\n".join(f for f in raw if f in scoped))
-PY
-)
-  else
-    SCOPED_FILES="$RAW_CHANGED"
-  fi
-fi
-
-echo "🔍 [1/3] Checking Tests & Active Plan Integrity..."
-if [[ "$IS_GIT" -eq 1 && -n "$SCOPED_FILES" ]]; then
-  if ! SCOPED_FILES="$SCOPED_FILES" HAS_HEAD="$HAS_HEAD" RED="$RED" YELLOW="$YELLOW" NC="$NC" python3 - <<'PY'
-import os, re, subprocess, sys
-
-RED = os.environ["RED"]
-YELLOW = os.environ["YELLOW"]
-NC = os.environ["NC"]
-has_head = os.environ.get("HAS_HEAD") == "1"
-files = [ln.strip() for ln in os.environ.get("SCOPED_FILES", "").splitlines() if ln.strip()]
-
-NON_CODE_EXTS = {
-    ".md", ".txt", ".rst", ".json", ".yaml", ".yml", ".toml",
-    ".lock", ".csv", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".pdf",
-}
-CHEAT_RE = re.compile(r"(\.(skip|only)\s*\(|@(Disabled|Ignore)\b|pytest\.mark\.(skip|xfail)|catch\s*\([^)]*\)\s*\{\s*\})")
-ASSERT_RE = re.compile(r"(expect\(|assert|should|verify\()")
 
 def git_out(args):
-    res = subprocess.run(["git"] + args, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
-    return res.returncode, res.stdout
+    r = subprocess.run(["git"] + args, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
+    return r.returncode, r.stdout
 
-fatal_hits = []
-deleted_asserts = []
 
-for rel_path in files:
-    ext = os.path.splitext(rel_path)[1].lower()
-    if ext in NON_CODE_EXTS:
-        continue
-    low = rel_path.lower()
-    if "test" not in low and "spec" not in low:
-        continue
+is_git = git_out(["rev-parse", "--is-inside-work-tree"])[0] == 0
+has_head = is_git and git_out(["rev-parse", "--verify", "HEAD"])[0] == 0
+verify_staged = os.environ.get("VERIFY_STAGED") == "1"
 
-    rc, _ = git_out(["ls-files", "--error-unmatch", "--", rel_path])
-    is_tracked = (rc == 0)
 
-    if is_tracked:
-        if has_head:
-            _, diff_text = git_out(["diff", "HEAD", "--unified=0", "--", rel_path])
-        else:
-            _, d1 = git_out(["diff", "--unified=0", "--", rel_path])
-            _, d2 = git_out(["diff", "--cached", "--unified=0", "--", rel_path])
-            diff_text = d1 + "\n" + d2
-        for line in diff_text.splitlines():
-            if line.startswith("+") and not line.startswith("+++"):
-                content = line[1:]
-                if CHEAT_RE.search(content):
-                    fatal_hits.append((rel_path, "tracked diff", content.strip()))
-            elif line.startswith("-") and not line.startswith("---"):
-                content = line[1:]
-                if ASSERT_RE.search(content):
-                    deleted_asserts.append((rel_path, content.strip()))
-    elif os.path.isfile(rel_path):
-        try:
-            with open(rel_path, "r", encoding="utf-8", errors="replace") as f:
+def git_diff(path=None, unified0=False):
+    tail = (["--unified=0"] if unified0 else []) + (["--", path] if path else [])
+    if verify_staged:
+        return git_out(["diff", "--cached"] + tail)[1]
+    if has_head:
+        return git_out(["diff", "HEAD"] + tail)[1]
+    return git_out(["diff"] + tail)[1] + "\n" + git_out(["diff", "--cached"] + tail)[1]
+
+
+def read_ctx(path):
+    if verify_staged and is_git and git_out(["ls-files", "--error-unmatch", "--", path])[0] == 0:
+        rc, out = git_out(["show", f":{path}"])
+        return out if rc == 0 else None
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+scoped_files = []
+if is_git:
+    if verify_staged:
+        raw = git_out(["diff", "--cached", "--name-only"])[1].splitlines()
+    else:
+        raw = git_out(["diff", "HEAD", "--name-only"] if has_head else ["diff", "--name-only"])[1].splitlines()
+        if not has_head:
+            raw += git_out(["diff", "--cached", "--name-only"])[1].splitlines()
+        raw += git_out(["ls-files", "--others", "--exclude-standard"])[1].splitlines()
+    changed = sorted({ln.strip() for ln in raw if ln.strip()})
+    vf = os.environ.get("VERIFY_FILES", "").strip()
+    if vf:
+        allow = {re.sub(r"^\./+", "", x.strip()) for x in re.split(r"[\s,]+", vf) if x.strip()}
+        scoped_files = [f for f in changed if f in allow]
+    else:
+        scoped_files = changed
+
+print("🔍 [1/3] Checking Tests & Active Plan Integrity...")
+if is_git and scoped_files:
+    NON_CODE = {".md", ".txt", ".rst", ".json", ".yaml", ".yml", ".toml", ".lock", ".csv", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".pdf"}
+    CHEAT_RE = re.compile(r"(\.(skip|only)\s*\(|@(Disabled|Ignore)\b|pytest\.mark\.(skip|xfail)|catch\s*\([^)]*\)\s*\{\s*\})")
+    ASSERT_RE = re.compile(r"(expect\(|assert|should|verify\()")
+    fatal_hits, deleted_asserts = [], []
+
+    for rel in scoped_files:
+        if os.path.splitext(rel)[1].lower() in NON_CODE or ("test" not in rel.lower() and "spec" not in rel.lower()):
+            continue
+        if git_out(["ls-files", "--error-unmatch", "--", rel])[0] == 0:
+            for ln in git_diff(rel, unified0=True).splitlines():
+                if ln.startswith("+") and not ln.startswith("+++") and CHEAT_RE.search(ln[1:]):
+                    fatal_hits.append((rel, "tracked diff", ln[1:].strip()))
+                elif ln.startswith("-") and not ln.startswith("---") and ASSERT_RE.search(ln[1:]):
+                    deleted_asserts.append((rel, ln[1:].strip()))
+        elif os.path.isfile(rel):
+            with open(rel, "r", encoding="utf-8", errors="replace") as f:
                 for idx, ln in enumerate(f, 1):
                     if CHEAT_RE.search(ln):
-                        fatal_hits.append((rel_path, f"untracked line {idx}", ln.strip()))
-        except OSError:
-            pass
+                        fatal_hits.append((rel, f"untracked line {idx}", ln.strip()))
 
-if deleted_asserts:
-    print(f"{YELLOW}⚠️  [HIGH RISK] Existing test assertions were modified or deleted:{NC}")
-    for path, snippet in deleted_asserts[:10]:
-        print(f"   - {path}: {snippet}")
-    print(f"{YELLOW}👉 Verify this is explicitly authorized under MODIFIED/REMOVED in the active Spec.{NC}")
+    if deleted_asserts:
+        print(f"{YELLOW}⚠️  [HIGH RISK] Existing test assertions were modified or deleted:{NC}")
+        for p, s in deleted_asserts[:10]:
+            print(f"   - {p}: {s}")
+        print(f"{YELLOW}👉 Verify this is explicitly authorized under MODIFIED/REMOVED in the active Spec.{NC}")
+    if fatal_hits:
+        print(f"{RED}❌ [FATAL] Banned test-cheating pattern detected (.skip, .only, @Disabled, or empty catch{{}}):{NC}")
+        for p, loc, s in fatal_hits[:10]:
+            print(f"   ❌ {p} ({loc}): {s}")
+        failed = True
 
-if fatal_hits:
-    print(f"{RED}❌ [FATAL] Banned test-cheating pattern detected (.skip, .only, @Disabled, or empty catch{{}}):{NC}")
-    for path, loc, snippet in fatal_hits[:10]:
-        print(f"   ❌ {path} ({loc}): {snippet}")
-    sys.exit(1)
-PY
-  then
-    FAILED=1
-  fi
-fi
-
-if ! SCOPED_FILES="$SCOPED_FILES" VERIFY_SPEC="${VERIFY_SPEC:-}" RED="$RED" GREEN="$GREEN" NC="$NC" python3 - <<'PY'
-import glob, os, re, sys
-
-RED = os.environ["RED"]
-GREEN = os.environ["GREEN"]
-NC = os.environ["NC"]
 verify_spec = os.environ.get("VERIFY_SPEC", "").strip()
-scoped_files = [ln.strip() for ln in os.environ.get("SCOPED_FILES", "").splitlines() if ln.strip()]
-
 target_specs = []
 if verify_spec:
-    if verify_spec != "None":
-        candidate = f".context/changes/{verify_spec}.md"
-        if os.path.isfile(candidate):
-            target_specs.append(candidate)
+    if verify_spec != "None" and os.path.isfile(f".context/changes/{verify_spec}.md"):
+        target_specs.append(f".context/changes/{verify_spec}.md")
 elif os.path.isdir(".context/changes") and scoped_files:
     basenames = {os.path.basename(f) for f in scoped_files}
     status_re = re.compile(r"^(?:[-*]\s+)?[*`]*Status[*`]*:\**\s*(APPROVED|IN_PROGRESS)\b", re.MULTILINE)
     for spec in sorted(glob.glob(".context/changes/*.md")):
-        base = os.path.basename(spec)
-        if base in ("_TEMPLATE.md", "rules-log.md"):
+        if os.path.basename(spec) in ("_TEMPLATE.md", "rules-log.md"):
             continue
-        try:
-            with open(spec, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-        except OSError:
-            continue
-        if status_re.search(content) and any(bn in content for bn in basenames):
+        with open(spec, "r", encoding="utf-8", errors="replace") as f:
+            txt = f.read()
+        if status_re.search(txt) and any(bn in txt for bn in basenames):
             target_specs.append(spec)
 
-bt = chr(96)
-tc_fail_re = re.compile(rf"^\| *{bt}?TC-[0-9]+{bt}? *\|.*(\buntested\b|\bfail\b|\bTBD\b)")
+tc_fail_re = re.compile(rf"^\| *{BT}?TC-[0-9]+{BT}? *\|.*(\buntested\b|\bfail\b|\bTBD\b)")
 unchecked_re = re.compile(r"^\s*[-*]\s*\[\s\]\s+")
-spec_failed = False
 for spec in target_specs:
-    try:
-        with open(spec, "r", encoding="utf-8", errors="replace") as f:
-            bad_rows = [ln.rstrip() for ln in f if tc_fail_re.match(ln) or unchecked_re.match(ln)]
-    except OSError:
-        continue
+    with open(spec, "r", encoding="utf-8", errors="replace") as f:
+        bad_rows = [ln.rstrip() for ln in f if tc_fail_re.match(ln) or unchecked_re.match(ln)]
     if bad_rows:
         print(f"{RED}❌ [FATAL] Active Plan ({spec}) still has incomplete items or TBD test cases:{NC}")
-        for row in bad_rows:
-            print(f"   {row}")
-        spec_failed = True
+        for r in bad_rows:
+            print(f"   {r}")
+        failed = True
     else:
         print(f"{GREEN}✅ Active Plan ({spec}) has zero incomplete items.{NC}")
 
-if spec_failed:
-    sys.exit(1)
-PY
-then
-  FAILED=1
-fi
+print("🔍 [2/3] Checking Governance Change Log (rules-log.md) Sync...")
+if is_git and scoped_files:
+    RULES_LOG = ".context/changes/rules-log.md"
+    EXACT_GOV = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".context/project.md"}
+    PREFIX_GOV = (".agents/", ".claude/", ".cursor/rules/")
+    HARNESS_INSTALL = {"AGENTS.md", "CLAUDE.md", ".context/project.md", ".agents/rules/coding-base.md", ".claude/rules/coding-base.md", ".cursor/rules/coding-base.mdc"}
+    in_head = lambda p: has_head and git_out(["cat-file", "-e", f"HEAD:{p}"])[0] == 0
 
-echo "🔍 [2/3] Checking Governance Change Log (rules-log.md) Sync..."
-if [[ "$IS_GIT" -eq 1 && -n "$SCOPED_FILES" ]]; then
-  if ! SCOPED_FILES="$SCOPED_FILES" HAS_HEAD="$HAS_HEAD" RED="$RED" NC="$NC" python3 - <<'PY'
-import datetime, fnmatch, os, re, subprocess, sys
+    proj_txt = read_ctx(".context/project.md") or ""
+    gov_patterns = []
+    gov_re = re.compile(r"^\s*(?:[-*]\s+)?[*`]*GOVERNANCE_DOCS[*`]*(?:\s*\([^)\n\r]*\))?[*`]*\s*:\**\s*(.*)$")
+    for ln in proj_txt.splitlines():
+        if m := gov_re.match(ln):
+            rest = re.sub(r"\s+\([^)]*\)\s*$", "", m.group(1).strip())
+            items = [x for span in re.findall(r"`([^`]+)`", rest) for x in span.split(",")] if "`" in rest else rest.split(",")
+            gov_patterns = [c for raw in items if (c := re.sub(r"^\./+", "", raw.strip().strip("'\""))) and c.upper() not in ("TBD", "NONE") and c not in ("*", "**")]
+            break
 
-RED = os.environ["RED"]
-NC = os.environ["NC"]
-has_head = os.environ.get("HAS_HEAD") == "1"
-files = [re.sub(r"^\./+", "", ln.strip()) for ln in os.environ.get("SCOPED_FILES", "").splitlines() if ln.strip()]
+    init_install = (".context/project.md" in scoped_files) and not in_head(".context/project.md")
+    proj_diff = git_diff(".context/project.md") if ".context/project.md" in scoped_files else ""
+    mode0 = bool(re.search(r"^-\s*STATUS:\s*UNINITIALIZED\b", proj_diff, re.M) and re.search(r"^\+\s*STATUS:\s*READY\b", proj_diff, re.M))
 
-RULES_LOG = ".context/changes/rules-log.md"
-EXACT_GOV = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".context/project.md"}
-PREFIX_GOV = (".agents/", ".claude/", ".cursor/rules/")
-HARNESS_INSTALL_FILES = {
-    "AGENTS.md",
-    "CLAUDE.md",
-    ".context/project.md",
-    ".agents/rules/coding-base.md",
-    ".claude/rules/coding-base.md",
-    ".cursor/rules/coding-base.mdc",
-}
-
-def git_out(args):
-    res = subprocess.run(["git"] + args, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace")
-    return res.returncode, res.stdout
-
-def is_in_head(path):
-    if not has_head:
-        return False
-    rc, _ = git_out(["cat-file", "-e", f"HEAD:{path}"])
-    return rc == 0
-
-is_initial_harness_install = (".context/project.md" in files) and (not is_in_head(".context/project.md"))
-
-def parse_governance_docs():
-    patterns = []
-    if not os.path.isfile(".context/project.md"):
-        return patterns
-    header_re = re.compile(
-        r"^\s*(?:[-*]\s+)?[*`]*GOVERNANCE_DOCS[*`]*(?:\s*\([^)\n\r]*\))?[*`]*\s*:\**\s*(.*)$"
-    )
-    try:
-        with open(".context/project.md", "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                m = header_re.match(line)
-                if not m:
-                    continue
-                rest = re.sub(r"\s+\([^)]*\)\s*$", "", m.group(1).strip())
-                if "`" in rest:
-                    raw_items = [
-                        item
-                        for span in re.findall(r"`([^`]+)`", rest)
-                        for item in span.split(",")
-                    ]
-                else:
-                    raw_items = rest.split(",")
-                for raw_item in raw_items:
-                    cleaned = re.sub(r"^\./+", "", raw_item.strip().strip("'\""))
-                    if cleaned and cleaned.upper() not in ("TBD", "NONE") and cleaned not in ("*", "**"):
-                        patterns.append(cleaned)
-                break
-    except OSError:
-        pass
-    return patterns
-
-def is_mode0_onboarding():
-    if has_head:
-        _, diff_txt = git_out(["diff", "HEAD", "--", ".context/project.md"])
-    else:
-        _, d1 = git_out(["diff", "--", ".context/project.md"])
-        _, d2 = git_out(["diff", "--cached", "--", ".context/project.md"])
-        diff_txt = d1 + "\n" + d2
-    return bool(
-        re.search(r"^-\s*STATUS:\s*UNINITIALIZED\b", diff_txt, re.MULTILINE)
-        and re.search(r"^\+\s*STATUS:\s*READY\b", diff_txt, re.MULTILINE)
-    )
-
-gov_patterns = parse_governance_docs()
-
-def matches_gov(path):
-    if path == RULES_LOG or path.startswith(".agents/teamwork/"):
-        return False
-    if is_initial_harness_install and path in HARNESS_INSTALL_FILES and not is_in_head(path):
-        return False
-    if path in EXACT_GOV or path.startswith(PREFIX_GOV):
-        if path == ".context/project.md" and is_mode0_onboarding():
+    def is_gov(p):
+        if p == RULES_LOG or p.startswith(".agents/teamwork/") or (init_install and p in HARNESS_INSTALL and not in_head(p)):
             return False
-        return True
-    for pat in gov_patterns:
-        if path == pat or (pat.endswith("/") and path.startswith(pat)) or fnmatch.fnmatch(path, pat):
-            return True
-    return False
+        if p in EXACT_GOV or p.startswith(PREFIX_GOV):
+            return not (p == ".context/project.md" and mode0)
+        return any(p == pat or (pat.endswith("/") and p.startswith(pat)) or fnmatch.fnmatch(p, pat) for pat in gov_patterns)
 
-modified_gov = [f for f in files if matches_gov(f)]
-if not modified_gov:
-    sys.exit(0)
+    norm_files = [re.sub(r"^\./+", "", f) for f in scoped_files]
+    modified_gov = [f for f in norm_files if is_gov(f)]
+    if modified_gov:
+        log_txt = read_ctx(RULES_LOG)
+        if log_txt is None:
+            print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) but {RULES_LOG} does not exist!{NC}")
+            failed = True
+        else:
+            entry_re = re.compile(r"^-\s*\[\d{4}-\d{2}-\d{2}")
+            ts_re = re.compile(r"^-\s*\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\]")
+            entries = [ln.strip() for ln in log_txt.splitlines() if entry_re.match(ln.strip())]
+            top = entries[0] if entries else ""
+            mentions = lambda ln, gp: bool(re.search(rf"(?<![\w./-]){re.escape(gp)}(?![\w./-])|(?<![\w./-]){re.escape(os.path.basename(gp))}(?![\w./-])", ln))
+            msg = "Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha>] <file(s)> — <what> | Why: <reason> | Replaces: <old|None>"
 
-if not os.path.isfile(RULES_LOG):
-    print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) but {RULES_LOG} does not exist!{NC}")
+            if git_out(["ls-files", "--error-unmatch", "--", RULES_LOG])[0] == 0:
+                added = [ln[1:].strip() for ln in git_diff(RULES_LOG, unified0=True).splitlines() if ln.startswith("+") and not ln.startswith("+++") and entry_re.match(ln[1:].strip())]
+                if not added or not top or top not in added or not all(any(mentions(ae, gf) for ae in added) for gf in modified_gov):
+                    print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending a matching top entry in {RULES_LOG}!{NC}\n{msg}")
+                    failed = True
+            else:
+                def epoch(ln):
+                    m = ts_re.match(ln)
+                    try:
+                        return int(datetime.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").timestamp()) if m else 0
+                    except ValueError:
+                        return 0
+
+                log_mtime = int(os.path.getmtime(RULES_LOG))
+                last_cts = {gf: (int(o.strip()) if in_head(gf) and (r := git_out(["log", "-1", "--format=%ct", "--", gf]))[0] == 0 and (o := r[1]).strip().isdigit() else 0) for gf in modified_gov}
+                stale = [gf for gf, ct in last_cts.items() if ct and log_mtime < ct]
+                if stale:
+                    print(f"{RED}❌ [FATAL] {RULES_LOG} is older than the last commit to {stale[0]}; prepend a new entry for this edit!{NC}")
+                    failed = True
+                elif not top or not any(mentions(top, gf) for gf in modified_gov):
+                    print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}\n{msg}")
+                    failed = True
+                else:
+                    def covered(gf):
+                        if mentions(top, gf):
+                            return True
+                        for e in entries[1:]:
+                            if not any(mentions(e, x) for x in modified_gov):
+                                break
+                            if mentions(e, gf) and (last_cts[gf] == 0 or epoch(e) + 60 > last_cts[gf]):
+                                return True
+                        return False
+
+                    if not all(covered(gf) for gf in modified_gov):
+                        print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}\n{msg}")
+                        failed = True
+
+print("🔍 [3/3] Running Project VERIFY_CMD from .context/project.md...")
+if (proj_cmd_txt := read_ctx(".context/project.md")) is not None:
+    cmd_re = re.compile(rf"^\s*(?:[-*]\s+)?[*{BT}]*VERIFY_CMD[*{BT}]*(?:\s*\([^)\n\r]*\))?[*{BT}]*\s*:\**\s*(.*)$")
+    verify_cmd = ""
+    for ln in proj_cmd_txt.splitlines():
+        if m := cmd_re.match(ln):
+            rest = m.group(1).strip()
+            if rest.startswith(BT * 2):
+                m2 = re.match(rf"^{BT}{{2}}\s*(.*?)\s*{BT}{{2}}", rest)
+                verify_cmd = m2.group(1).strip() if m2 else ""
+            elif rest.startswith(BT):
+                m2 = re.match(rf"^{BT}([^{BT}]*){BT}", rest)
+                verify_cmd = m2.group(1).strip() if m2 else ""
+            else:
+                verify_cmd = rest
+            break
+    if not verify_cmd or verify_cmd == "TBD":
+        print(f"{RED}❌ [FATAL] VERIFY_CMD is still 'TBD' in .context/project.md. Run Mode 0 (Onboard/Bootstrap) first.{NC}")
+        failed = True
+    else:
+        print(f"▶ Executing: {verify_cmd}")
+        if subprocess.run(["/bin/bash", "-c", verify_cmd]).returncode != 0:
+            print(f"{RED}❌ [FATAL] Project VERIFY_CMD failed!{NC}")
+            failed = True
+
+if failed:
+    print(f"\n{RED}⛔ GATEKEEPER BLOCKED COMPLETION. Fix all [FATAL] issues above before reporting done.{NC}")
     sys.exit(1)
 
-rc, _ = git_out(["ls-files", "--error-unmatch", "--", RULES_LOG])
-is_log_tracked = (rc == 0)
-
-entry_re = re.compile(r"^-\s*\[\d{4}-\d{2}-\d{2}")
-
-def mentions_file(entry_line, gov_path):
-    base = os.path.basename(gov_path)
-    pat = rf"(?<![\w./-]){re.escape(gov_path)}(?![\w./-])|(?<![\w./-]){re.escape(base)}(?![\w./-])"
-    return bool(re.search(pat, entry_line))
-
-entries = []
-try:
-    with open(RULES_LOG, "r", encoding="utf-8", errors="replace") as f:
-        for ln in f:
-            if entry_re.match(ln.strip()):
-                entries.append(ln.strip())
-except OSError:
-    pass
-top_entry = entries[0] if entries else ""
-
-if is_log_tracked:
-    if has_head:
-        _, log_diff = git_out(["diff", "HEAD", "--unified=0", "--", RULES_LOG])
-    else:
-        _, d1 = git_out(["diff", "--unified=0", "--", RULES_LOG])
-        _, d2 = git_out(["diff", "--cached", "--unified=0", "--", RULES_LOG])
-        log_diff = d1 + "\n" + d2
-    added_entries = [
-        line[1:].strip()
-        for line in log_diff.splitlines()
-        if line.startswith("+") and not line.startswith("+++") and entry_re.match(line[1:].strip())
-    ]
-    if (
-        not added_entries
-        or not top_entry
-        or top_entry not in added_entries
-        or not all(any(mentions_file(ae, gf) for ae in added_entries) for gf in modified_gov)
-    ):
-        print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending a matching top entry in {RULES_LOG}!{NC}")
-        print("Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha>] <file(s)> — <what> | Why: <reason> | Replaces: <old|None>")
-        sys.exit(1)
-else:
-    if not top_entry or not any(mentions_file(top_entry, gf) for gf in modified_gov):
-        print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}")
-        print("Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha>] <file(s)> — <what> | Why: <reason> | Replaces: <old|None>")
-        sys.exit(1)
-    log_mtime = int(os.path.getmtime(RULES_LOG))
-    last_cts = {}
-    for gf in modified_gov:
-        last_ct = 0
-        if is_in_head(gf):
-            rc_ct, out_ct = git_out(["log", "-1", "--format=%ct", "--", gf])
-            if rc_ct == 0 and out_ct.strip().isdigit():
-                last_ct = int(out_ct.strip())
-                if log_mtime < last_ct:
-                    print(f"{RED}❌ [FATAL] {RULES_LOG} is older than the last commit to {gf}; prepend a new entry for this edit!{NC}")
-                    sys.exit(1)
-        last_cts[gf] = last_ct
-
-    ts_re = re.compile(r"^-\s*\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\]")
-    def entry_epoch(line):
-        m = ts_re.match(line)
-        if not m:
-            return 0
-        try:
-            return int(datetime.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").timestamp())
-        except ValueError:
-            return 0
-
-    def file_covered(gf):
-        if mentions_file(top_entry, gf):
-            return True
-        ct = last_cts[gf]
-        for e in entries[1:]:
-            if not any(mentions_file(e, x) for x in modified_gov):
-                break
-            if mentions_file(e, gf) and (ct == 0 or entry_epoch(e) + 60 > ct):
-                return True
-        return False
-
-    if not all(file_covered(gf) for gf in modified_gov):
-        print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}")
-        print("Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha>] <file(s)> — <what> | Why: <reason> | Replaces: <old|None>")
-        sys.exit(1)
+print(f"\n{GREEN}✅ GATEKEEPER PASSED.{NC}")
 PY
-  then
-    FAILED=1
-  fi
-fi
-
-echo "🔍 [3/3] Running Project VERIFY_CMD from .context/project.md..."
-if [[ -f ".context/project.md" ]]; then
-  VERIFY_CMD=$(python3 - <<'PY'
-import re
-bt = chr(96)
-pat = re.compile(
-    rf"^\s*(?:[-*]\s+)?[*{bt}]*VERIFY_CMD[*{bt}]*(?:\s*\([^)\n\r]*\))?[*{bt}]*\s*:\**\s*(.*)$"
-)
-with open(".context/project.md", "r", encoding="utf-8", errors="replace") as f:
-    for line in f:
-        m = pat.match(line)
-        if not m:
-            continue
-        rest = m.group(1).strip()
-        if rest.startswith(bt * 2):
-            m2 = re.match(rf"^{bt}{{2}}\s*(.*?)\s*{bt}{{2}}", rest)
-            val = m2.group(1).strip() if m2 else ""
-        elif rest.startswith(bt):
-            m2 = re.match(rf"^{bt}([^{bt}]*){bt}", rest)
-            val = m2.group(1).strip() if m2 else ""
-        else:
-            val = rest
-        print(val)
-        break
-PY
-)
-  if [[ -z "$VERIFY_CMD" || "$VERIFY_CMD" == "TBD" ]]; then
-    echo -e "${RED}❌ [FATAL] VERIFY_CMD is still 'TBD' in .context/project.md. Run Mode 0 (Onboard/Bootstrap) first.${NC}"
-    FAILED=1
-  else
-    echo "▶ Executing: $VERIFY_CMD"
-    if ! bash -c "$VERIFY_CMD"; then
-      echo -e "${RED}❌ [FATAL] Project VERIFY_CMD failed!${NC}"
-      FAILED=1
-    fi
-  fi
-fi
-
-if [[ "$FAILED" -ne 0 ]]; then
-  echo -e "\n${RED}⛔ GATEKEEPER BLOCKED COMPLETION. Fix all [FATAL] issues above before reporting done.${NC}"
-  exit 1
-fi
-
-echo -e "\n${GREEN}✅ GATEKEEPER PASSED.${NC}"
