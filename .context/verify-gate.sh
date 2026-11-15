@@ -24,10 +24,10 @@ verify_staged = os.environ.get("VERIFY_STAGED") == "1"
 def git_diff(path=None, unified0=False):
     tail = (["--unified=0"] if unified0 else []) + (["--", path] if path else [])
     if verify_staged:
-        return git_out(["diff", "--cached"] + tail)[1]
+        return git_out(["diff", "--no-renames", "--cached"] + tail)[1]
     if has_head:
-        return git_out(["diff", "HEAD"] + tail)[1]
-    return git_out(["diff"] + tail)[1] + "\n" + git_out(["diff", "--cached"] + tail)[1]
+        return git_out(["diff", "--no-renames", "HEAD"] + tail)[1]
+    return git_out(["diff", "--no-renames"] + tail)[1] + "\n" + git_out(["diff", "--no-renames", "--cached"] + tail)[1]
 
 
 def read_ctx(path):
@@ -93,13 +93,16 @@ if is_git and scoped_files:
 verify_spec = os.environ.get("VERIFY_SPEC", "").strip()
 target_specs = []
 if verify_spec:
-    if verify_spec != "None" and os.path.isfile(f".context/changes/{verify_spec}.md"):
-        target_specs.append(f".context/changes/{verify_spec}.md")
-elif os.path.isdir(".context/changes") and scoped_files:
+    if verify_spec != "None":
+        for folder in ("plans", "changes"):
+            if os.path.isfile(f".context/{folder}/{verify_spec}.md"):
+                target_specs.append(f".context/{folder}/{verify_spec}.md")
+                break
+elif scoped_files:
     basenames = {os.path.basename(f) for f in scoped_files}
     status_re = re.compile(r"^(?:[-*]\s+)?[*`]*Status[*`]*:\**\s*(APPROVED|IN_PROGRESS)\b", re.MULTILINE)
-    for spec in sorted(glob.glob(".context/changes/*.md")):
-        if os.path.basename(spec) in ("_TEMPLATE.md", "rules-log.md"):
+    for spec in sorted(glob.glob(".context/plans/*.md") + glob.glob(".context/changes/*.md")):
+        if os.path.basename(spec) in ("_TEMPLATE.md", "rules-log.md", "decisions.md"):
             continue
         with open(spec, "r", encoding="utf-8", errors="replace") as f:
             txt = f.read()
@@ -119,9 +122,9 @@ for spec in target_specs:
     else:
         print(f"{GREEN}✅ Active Plan ({spec}) has zero incomplete items.{NC}")
 
-print("🔍 [2/3] Checking Governance Change Log (rules-log.md) Sync...")
+print("🔍 [2/3] Checking Governance & Decisions Log (.context/decisions.md) Sync...")
 if is_git and scoped_files:
-    RULES_LOG = ".context/changes/rules-log.md"
+    RULES_LOG = ".context/decisions.md"
     EXACT_GOV = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".context/project.md"}
     PREFIX_GOV = (".agents/", ".claude/", ".cursor/rules/")
     HARNESS_INSTALL = {"AGENTS.md", "CLAUDE.md", ".context/project.md", ".agents/rules/coding-base.md", ".claude/rules/coding-base.md", ".cursor/rules/coding-base.mdc"}
@@ -142,7 +145,7 @@ if is_git and scoped_files:
     mode0 = bool(re.search(r"^-\s*STATUS:\s*UNINITIALIZED\b", proj_diff, re.M) and re.search(r"^\+\s*STATUS:\s*READY\b", proj_diff, re.M))
 
     def is_gov(p):
-        if p == RULES_LOG or p.startswith(".agents/teamwork/") or (init_install and p in HARNESS_INSTALL and not in_head(p)):
+        if p in (RULES_LOG, ".context/changes/rules-log.md") or p.startswith(".agents/teamwork/") or (init_install and p in HARNESS_INSTALL and not in_head(p)):
             return False
         if p in EXACT_GOV or p.startswith(PREFIX_GOV):
             return not (p == ".context/project.md" and mode0)
@@ -161,7 +164,7 @@ if is_git and scoped_files:
             entries = [ln.strip() for ln in log_txt.splitlines() if entry_re.match(ln.strip())]
             top = entries[0] if entries else ""
             mentions = lambda ln, gp: bool(re.search(rf"(?<![\w./-]){re.escape(gp)}(?![\w./-])|(?<![\w./-]){re.escape(os.path.basename(gp))}(?![\w./-])", ln))
-            msg = "Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha>] <file(s)> — <what> | Why: <reason> | Replaces: <old|None>"
+            msg = "Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha|unborn>] <scope/file(s)> — <decision/change> | Why: <reason> | Rejected/Replaces: <old|None>"
 
             if git_out(["ls-files", "--error-unmatch", "--", RULES_LOG])[0] == 0:
                 added = [ln[1:].strip() for ln in git_diff(RULES_LOG, unified0=True).splitlines() if ln.startswith("+") and not ln.startswith("+++") and entry_re.match(ln[1:].strip())]
