@@ -8,7 +8,7 @@ A minimal, zero-dependency project harness for AI coding agents (**Antigravity, 
    - If the target project already has `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`, `inject.sh` leaves them untouched and installs the harness into `.agents/rules/coding-base.md`, `.claude/rules/coding-base.md`, and `.cursor/rules/coding-base.mdc`.
 2. **Git Stealth Mode or Solo `--track` Mode:**
    - **Stealth (default):** Hides harness files via `.git/info/exclude` (including `git worktree` setups). `git status` stays clean with zero noise in team PRs.
-   - **Tracked (`--track`):** Removes stealth exclusions so solo or private repos can commit and push `.context/` and harness rules to Git (while keeping `.context/changes/commit-log.md` and `.code-review-graph/` ignored). `--upgrade` and `--force` preserve the repo's active mode.
+   - **Tracked (`--track`):** Removes stealth exclusions so solo or private repos can commit and push `.context/` and harness rules to Git (while keeping `.code-review-graph/` ignored). `--upgrade` and `--force` preserve the repo's active mode.
 3. **Multi-Session Concurrency (`git worktree` First):**
    - Uses isolated `git worktree` / `Workspace: "share"` checkouts as the primary mechanism for parallel work so diffs and builds never collide; when sharing a working tree, coordinates via the `Active In-Flight Sessions` table in `.context/state.md` and full-pipeline scoped verification (`VERIFY_FILES`, `VERIFY_SPEC`).
 4. **2-End Session Lifecycle:**
@@ -16,9 +16,8 @@ A minimal, zero-dependency project harness for AI coding agents (**Antigravity, 
    - **End-of-Turn:** Runs the mechanical gatekeeper + live E2E verification (DB/API/Browser), then parks the task row as `READY` so you can still request follow-up tweaks before it closes.
 5. **Governance Change Log (Mechanically Enforced):**
    - Any edit to `AGENTS.md`, `CLAUDE.md`, `.agents/**`, `.context/project.md`, or docs listed in `GOVERNANCE_DOCS` gets a one-line entry with `[base: <short-sha>]` at the top of `.context/changes/rules-log.md` (what changed, why, what it replaced), verified mechanically by `verify-gate.sh` (except initial Mode 0 `UNINITIALIZED` → `READY` onboarding). Agents read the top entries before touching rules, so deliberate decisions don't get silently reverted.
-6. **Native Git Per-File Rollback & Auto Context Commit Log:**
-   - Zero custom `.vault` repos or extra bloat: every `git commit` triggers a lightweight `post-commit` hook that records `commit:<sha>`, `prev:<sha>`, optional tags, changed files, and the active AI task/spec context into gitignored `.context/changes/commit-log.md`.
-   - Spec files (`_TEMPLATE.md`) and `rules-log.md` anchor pre-change refs (`Base Git Ref` / `[base: <sha>]`), and optional milestone tags (`git tag ckpt/<slug>`) bookmark risky experiments so any single file can be restored cleanly via `git restore --worktree --source=<ref> -- <file...>`.
+6. **Native Git Per-File Rollback & Milestone Tags:**
+   - Zero duplicate commit-log files or custom `.vault` wrappers: `git log --oneline -- <file>` + `<sha>` / `<sha>~1`, `[base: <sha>]` in `rules-log.md`, `Base Git Ref` in specs, and optional local milestone tags (`git tag ckpt/<slug>`) give exact refs to restore any single file cleanly via `git restore --worktree --source=<ref> -- <file...>`.
 7. **Mechanical Anti-Cheat Gatekeeper (`verify-gate.sh` & `check-blast-radius.py`):**
    - Blocks `.skip`, `.only`, `@Disabled`, empty `catch {}` blocks, and unauthorized test assertion deletions across both tracked diffs and untracked test files, scoped cleanly by `VERIFY_FILES` across all 5 steps.
    - Traces caller blast radius via `.code-review-graph/graph.db` (SQLite AST — `FATAL` on breaking signature changes, `WARN` on backward-compatible optional parameter additions) with automatic `WARN`-level fallback to `git diff` + `git grep` (`--strict` to enforce), plus dynamic `CONTRACT_DOC` cross-repo consumer scanning.
@@ -33,15 +32,13 @@ base-ai-coding-simple-flexible/
 ├── CLAUDE.md -> AGENTS.md         # Symlink for Claude Code compatibility
 ├── inject.sh                      # 1-command installer (Stealth / Upgrade / Track / Force modes)
 └── .context/
-    ├── .gitignore                 # Ignores local changes/commit-log.md in tracked repos
     ├── project.md                 # Project map: Stack, VERIFY_CMD, Runtime Sandbox, Error Memory
     ├── state.md                   # Shared-tree session state table (< 30 lines)
     ├── verify-gate.sh             # 5-step mechanical gatekeeper (Anti-cheat, Blast-radius, TC-xx, rules-log, VERIFY_CMD)
     ├── check-blast-radius.py      # Dual-engine caller impact analyzer (SQLite Call Graph + Git Grep)
     └── changes/
         ├── _TEMPLATE.md           # Delta Spec + Base Git Ref + Spec-to-Test Contract + Cross-Repo Matrix
-        ├── rules-log.md           # Reverse-chronological log (newest at top) of every rule / key-doc change
-        └── commit-log.md          # Auto-generated local log (gitignored) linking commits, prev refs, tags & AI context
+        └── rules-log.md           # Reverse-chronological log (newest at top) of every rule / key-doc change
 ```
 
 ---
@@ -76,11 +73,11 @@ git clone https://github.com/hkien2310/base-ai-coding-simple-flexible.git ~/codi
 | Flag | Behavior |
 | :--- | :--- |
 | *(no flag)* / `--stealth` | **Stealth + Coexistence (Default):** Keeps existing `AGENTS.md`/`CLAUDE.md` untouched (installs `.agents/rules/coding-base.md` alongside them) and hides all harness files in `.git/info/exclude`. |
-| `--upgrade` | **Safe Engine Update:** Updates engine files (`AGENTS.md` / `coding-base.md`, `verify-gate.sh`, `check-blast-radius.py`, `_TEMPLATE.md`) + `pre-commit`/`post-commit` hooks, and preserves `project.md`, `state.md`, `commit-log.md`, custom project rules, and active tracking mode (`stealth` vs `track`). |
-| `--track` | **Git-Tracked Mode (Solo / Private Repos):** Removes harness exclusions from `.git/info/exclude` so you can commit and push `.context/` and rules to Git while keeping `.context/changes/commit-log.md` and `.code-review-graph/` ignored. Re-run with `--stealth` anytime to hide again. |
+| `--upgrade` | **Safe Engine Update:** Updates engine files (`AGENTS.md` / `coding-base.md`, `verify-gate.sh`, `check-blast-radius.py`, `_TEMPLATE.md`) + local `pre-commit` hook, strips legacy harness artifacts if present, and preserves `project.md`, `state.md`, custom project rules, and active tracking mode (`stealth` vs `track`). |
+| `--track` | **Git-Tracked Mode (Solo / Private Repos):** Removes harness exclusions from `.git/info/exclude` so you can commit and push `.context/` and rules to Git while keeping `.code-review-graph/` ignored. Re-run with `--stealth` anytime to hide again. |
 | `--force` | **Factory Reset:** Resets `.context/project.md` and `.context/state.md` back to blank templates (never overwrites custom project `AGENTS.md`/`CLAUDE.md`; preserves tracking mode). |
 
-> **Note for non-Git folders:** You can inject into an empty folder before running `git init`. Once you run `git init` later, re-run `~/coding-base/inject.sh /path/to/your-project` so `.git/info/exclude`, `pre-commit`/`post-commit` hooks, and `commit-log.md` are wired up automatically.
+> **Note for non-Git folders:** You can inject into an empty folder before running `git init`. Once you run `git init` later, re-run `~/coding-base/inject.sh /path/to/your-project` so `.git/info/exclude` and the local `pre-commit` gatekeeper hook are wired up automatically.
 
 ### Option B — Ask Your AI Agent Directly
 
@@ -94,16 +91,17 @@ Clone https://github.com/hkien2310/base-ai-coding-simple-flexible.git to ~/codin
 
 ## Per-File Rollback & Milestone Tags (Native Git)
 
-Every `git commit` triggers a lightweight `post-commit` hook that logs `commit:<sha>`, `prev:<sha>`, optional tags, changed files, and active AI task/spec context at the top of `.context/changes/commit-log.md` (gitignored). Combined with `[base: <sha>]` in `rules-log.md` and `Base Git Ref` in specs, you always have exact refs to restore individual files without touching the rest of your workspace.
+Native Git already tracks every commit `<sha>` and its immediate parent `<sha>~1` (the exact state *before* that commit). Combined with `[base: <sha>]` in `rules-log.md` and `Base Git Ref` in specs, you can inspect or restore any single file without touching the rest of your workspace:
 
 ```bash
-# 1. Pick the commit / prev / base ref from .context/changes/commit-log.md or rules-log.md (or git log --oneline -- path/to/file)
+# 1. Inspect the history of the file you want to roll back
+git log --oneline -n 10 -- path/to/file
 
-# 2. Preview differences before rolling back
-git diff <ref> -- path/to/file
+# 2. Preview differences (use <sha> for that commit's state, or <sha>~1 for state BEFORE <sha>)
+git diff <sha>~1 -- path/to/file
 
 # 3. Roll back ONLY that file (safe for stealth/excluded files too — never stages into .git/index)
-git restore --worktree --source=<ref> -- path/to/file
+git restore --worktree --source=<sha>~1 -- path/to/file
 
 # 4. Optional milestone tag before big experiments (local bookmarks — never `git push --tags` on shared repos)
 git tag ckpt/ten-moc                   # Mark current commit

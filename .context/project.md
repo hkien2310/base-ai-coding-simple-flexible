@@ -38,3 +38,4 @@ STATUS: UNINITIALIZED
 - [ ] Never weaken or delete an existing test assertion unless the spec explicitly modifies/removes that behavior.
 - [ ] Before modifying shared functions, run `python3 .context/check-blast-radius.py --mode pre-edit --symbol <name>` to check all call sites.
 - [ ] Never build custom local VCS/vault folders when native Git (commit/tag + git restore --worktree --source) already handles per-file rollback.
+- [ ] Never duplicate native git log with custom post-commit log files; rely on git log (<sha>/<sha>~1) + rules-log.md (Why/Replaces).

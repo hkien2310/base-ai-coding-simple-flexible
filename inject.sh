@@ -6,10 +6,10 @@ set -euo pipefail
 #
 # Usage:
 #   ./inject.sh /path/to/target-repo                       # Stealth mode (hidden via .git/info/exclude, coexists with existing AGENTS.md)
-#   ./inject.sh /path/to/target-repo --upgrade             # Upgrade engine files & hooks only (preserves project.md, state.md, commit-log.md, tracking mode, custom AGENTS.md)
-#   ./inject.sh /path/to/target-repo --track               # Tracked mode (commit & push .context/ and harness rules to Git; keeps .context/changes/commit-log.md ignored)
-#   ./inject.sh /path/to/target-repo --upgrade --track     # Upgrade engine files & hooks AND switch to tracked mode (or --upgrade --stealth)
-#   ./inject.sh /path/to/target-repo --force               # Reset harness state files including project.md & state.md (still preserves custom AGENTS.md & commit-log.md)
+#   ./inject.sh /path/to/target-repo --upgrade             # Upgrade engine files & pre-commit hook only (preserves project.md, state.md, tracking mode, custom AGENTS.md)
+#   ./inject.sh /path/to/target-repo --track               # Tracked mode (commit & push .context/ and harness rules to Git; keeps .code-review-graph/ ignored)
+#   ./inject.sh /path/to/target-repo --upgrade --track     # Upgrade engine files & hook AND switch to tracked mode (or --upgrade --stealth)
+#   ./inject.sh /path/to/target-repo --force               # Reset harness state files including project.md & state.md (still preserves custom AGENTS.md & tracking mode)
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="${1:-}"
@@ -153,8 +153,22 @@ if [[ -n "$RULE_BEFORE_HASH" && "$RULE_BEFORE_HASH" != "$RULE_AFTER_HASH" ]]; th
 fi
 
 # 2. Install .context/ state (preserved on --upgrade) & mechanical gatekeeper (updated on --upgrade)
+rm -f "$TARGET_DIR/.context/changes/commit-log.md"
 CTX_GITIGNORE="$TARGET_DIR/.context/.gitignore"
-ensure_line_in_file "$CTX_GITIGNORE" "changes/commit-log.md"
+if [[ -f "$CTX_GITIGNORE" ]]; then
+  CTX_GITIGNORE="$CTX_GITIGNORE" python3 - <<'PY'
+import os
+from pathlib import Path
+
+p = Path(os.environ["CTX_GITIGNORE"])
+obsolete = {"changes/commit-log.md", ".vault/", ".vault"}
+kept = [ln for ln in p.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip() not in obsolete]
+if any(ln.strip() for ln in kept):
+    p.write_text("\n".join(kept) + "\n", encoding="utf-8")
+else:
+    p.unlink()
+PY
+fi
 
 copy_state "$BASE_DIR/.context/project.md" "$TARGET_DIR/.context/project.md"
 copy_state "$BASE_DIR/.context/state.md" "$TARGET_DIR/.context/state.md"
@@ -183,7 +197,14 @@ log_path = repo / ".context" / "changes" / "rules-log.md"
 base_res = subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False)
 base_sha = base_res.stdout.strip() if base_res.returncode == 0 and base_res.stdout.strip() else "unborn"
 now_s = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-entry = f"- [{now_s}] [base: {base_sha}] {rule_rel} — Upgraded coding-base harness engine via inject.sh | Why: sync latest coding-base rules and gatekeeper | Replaces: previous coding-base version"
+needle = f"[base: {base_sha}] {rule_rel} — Upgraded coding-base harness engine via inject.sh"
+entry = f"- [{now_s}] {needle} | Why: sync latest coding-base rules and gatekeeper | Replaces: previous coding-base version"
+
+head_lines = set()
+if base_sha != "unborn":
+    show_res = subprocess.run(["git", "-C", str(repo), "show", "HEAD:.context/changes/rules-log.md"], capture_output=True, text=True, check=False)
+    if show_res.returncode == 0:
+        head_lines = set(show_res.stdout.splitlines())
 
 if log_path.is_file():
     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -195,6 +216,9 @@ rest = lines[1:] if (lines and lines[0].lstrip().startswith("#")) else lines
 while rest and not rest[0].strip():
     rest = rest[1:]
 
+if rest and needle in rest[0] and rest[0] not in head_lines:
+    rest = rest[1:]
+
 out = [header, "", entry] + rest
 log_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PY
@@ -204,31 +228,30 @@ fi
 # 3. Git Stealth vs Tracked Mode via .git/info/exclude & native hooks via git-common-dir (supports worktrees)
 if [[ -n "$GIT_COMMON_DIR" ]]; then
   mkdir -p "$(dirname "$EXCLUDE_FILE")"
+  ensure_line_in_file "$EXCLUDE_FILE" ".code-review-graph/"
 
-  for internal_pattern in ".code-review-graph/" ".context/changes/commit-log.md"; do
-    ensure_line_in_file "$EXCLUDE_FILE" "$internal_pattern"
-  done
-
-  if [[ "$EFFECTIVE_MODE" == "track" ]]; then
-    EXCLUDE_FILE="$EXCLUDE_FILE" HAS_CUSTOM_RULES="$HAS_CUSTOM_RULES" python3 - <<'PY'
+  EXCLUDE_FILE="$EXCLUDE_FILE" EFFECTIVE_MODE="$EFFECTIVE_MODE" HAS_CUSTOM_RULES="$HAS_CUSTOM_RULES" python3 - <<'PY'
 import os
 from pathlib import Path
 
 p = Path(os.environ["EXCLUDE_FILE"])
-remove_set = {
-    ".context/",
-    ".context/.vault/",
-    ".agents/rules/coding-base.md",
-    ".claude/rules/coding-base.md",
-    ".cursor/rules/coding-base.mdc",
-}
-if os.environ.get("HAS_CUSTOM_RULES") == "0":
-    remove_set |= {"AGENTS.md", "CLAUDE.md"}
+remove_set = {".context/.vault/", ".context/changes/commit-log.md"}
+if os.environ.get("EFFECTIVE_MODE") == "track":
+    remove_set |= {
+        ".context/",
+        ".agents/rules/coding-base.md",
+        ".claude/rules/coding-base.md",
+        ".cursor/rules/coding-base.mdc",
+    }
+    if os.environ.get("HAS_CUSTOM_RULES") == "0":
+        remove_set |= {"AGENTS.md", "CLAUDE.md"}
 lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
 filtered = [ln for ln in lines if ln.strip() not in remove_set]
 p.write_text(("\n".join(filtered) + "\n") if filtered else "", encoding="utf-8")
 PY
-    echo "📦 Tracked Mode active: .context/ & harness rules are visible to Git (commit-log.md stays ignored)."
+
+  if [[ "$EFFECTIVE_MODE" == "track" ]]; then
+    echo "📦 Tracked Mode active: .context/ & harness rules are visible to Git (.code-review-graph/ stays ignored)."
   else
     for pattern in ".context/" ".agents/rules/coding-base.md" ".claude/rules/coding-base.md" ".cursor/rules/coding-base.mdc" "CLAUDE.local.md"; do
       ensure_line_in_file "$EXCLUDE_FILE" "$pattern"
@@ -270,162 +293,9 @@ EOF
   fi
 
   POST_COMMIT_HOOK="$GIT_COMMON_DIR/hooks/post-commit"
-  if [[ ! -f "$POST_COMMIT_HOOK" ]] || grep -q "# coding-base-hook" "$POST_COMMIT_HOOK" 2>/dev/null; then
-    cat > "$POST_COMMIT_HOOK" <<'EOF'
-#!/usr/bin/env bash
-# coding-base-hook
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$REPO_ROOT" || exit 0
-[[ -d ".context/changes" ]] || exit 0
-
-SEED_MODE="${1:-}" exec python3 - "$REPO_ROOT" <<'PY'
-import os
-import re
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
-
-repo = Path(sys.argv[1])
-changes_dir = repo / ".context" / "changes"
-log_path = changes_dir / "commit-log.md"
-seed_mode = os.environ.get("SEED_MODE", "") == "--seed"
-env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") or k == "GIT_EXEC_PATH"}
-env["GIT_TERMINAL_PROMPT"] = "0"
-bt = chr(96)
-
-HEADER = [
-    "# Context Commit Log (local only, gitignored — newest at top, max 200)",
-    f"> Preview diff: {bt}git diff <prev> -- <file>{bt} | Per-file rollback: {bt}git restore --worktree --source=<prev> -- <file>{bt}",
-    f"> Optional milestone tag: {bt}git tag ckpt/<slug>-YYYYMMDD{bt} | Never {bt}git push --tags{bt} on shared repos",
-]
-
-
-def g(args):
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-
-def active_context():
-    st = repo / ".context" / "state.md"
-    if not st.is_file():
-        return ""
-    rows = []
-    for raw in st.read_text(encoding="utf-8", errors="replace").splitlines():
-        s = raw.strip()
-        if not (s.startswith("|") and s.endswith("|")):
-            continue
-        cols = [re.sub(r"^`+|`+$", "", c.strip()) for c in s.strip("|").split("|")]
-        if len(cols) < 3:
-            continue
-        slug, lane, stage = cols[0], cols[1], cols[2]
-        if (
-            not slug
-            or slug.lower() in ("session / task slug", "none", "-", "—")
-            or slug.startswith("---")
-            or slug.startswith(":---")
-            or stage.upper() == "IDLE"
-            or "stage" in stage.lower()
-        ):
-            continue
-        goal = ""
-        spec = changes_dir / f"{slug}.md"
-        if spec.is_file() and spec.resolve().parent == changes_dir.resolve():
-            for ln in spec.read_text(encoding="utf-8", errors="replace").splitlines():
-                m = re.match(r"^\s*[-*]\s*\*\*Goal:\*\*\s*(.+)$", ln)
-                if m:
-                    cand = re.sub(r"\s+", " ", m.group(1)).strip()
-                    if (
-                        cand
-                        and not (cand.startswith("<") and cand.endswith(">"))
-                        and "1-2 sentences explaining" not in cand
-                    ):
-                        goal = cand[:90] + ("..." if len(cand) > 90 else "")
-                    break
-        lbl = f"{slug} ({lane}/{stage})" if lane and stage else slug
-        rows.append(f"{lbl}: {goal}" if goal else lbl)
-    return "; ".join(rows).replace("|", "/")
-
-
-def format_commit(rev, ctx=""):
-    r = g(["log", "-1", "--format=%H%x09%h%x09%p%x09%cd%x09%s", "--date=format:%Y-%m-%d %H:%M", rev])
-    if r.returncode != 0 or not r.stdout.strip():
-        return None, ""
-    parts = r.stdout.rstrip("\r\n").split("\t", 4)
-    if len(parts) < 5:
-        return None, ""
-    full_sha, sha, parents, dt, subj = parts
-    prev = parents.split()[0] if parents.strip() else "root"
-    t_res = g(["tag", "--points-at", full_sha])
-    tags = ",".join(ln.strip() for ln in t_res.stdout.splitlines() if ln.strip()) if t_res.returncode == 0 else ""
-    f_res = g(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", full_sha])
-    cfiles = [ln.strip() for ln in f_res.stdout.splitlines() if ln.strip()] if f_res.returncode == 0 else []
-    if len(cfiles) > 6:
-        f_str = ", ".join(cfiles[:6]) + f" (+{len(cfiles) - 6} more)"
-    else:
-        f_str = ", ".join(cfiles)
-    subj_clean = re.sub(r"\s+", " ", subj).strip().replace("|", "/")
-    tag_part = f" tag:{bt}{tags}{bt}" if tags else ""
-    ctx_part = f" | ctx: {ctx}" if ctx else ""
-    files_part = f" | files: {f_str}" if f_str else ""
-    line = f"- [{dt}] commit:{bt}{sha}{bt} prev:{bt}{prev}{bt}{tag_part} — {subj_clean}{ctx_part}{files_part}"
-    return line, sha
-
-
-try:
-    existing_entries = []
-    if log_path.is_file():
-        for ln in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if ln.startswith("- ["):
-                existing_entries.append(ln)
-
-    if seed_mode:
-        revs_res = g(["rev-list", "-n", "10", "HEAD"])
-        revs = [ln.strip() for ln in revs_res.stdout.splitlines() if ln.strip()] if revs_res.returncode == 0 else []
-        new_entries = []
-        for rv in revs:
-            ln, _ = format_commit(rv, ctx="")
-            if ln:
-                new_entries.append(ln)
-    else:
-        ln, sha = format_commit("HEAD", ctx=active_context())
-        if not ln:
-            sys.exit(0)
-        if existing_entries and f"commit:{bt}{sha}{bt}" in existing_entries[0]:
-            sys.exit(0)
-        new_entries = [ln] + existing_entries
-
-    entries = new_entries[:200]
-    content = "\n".join(HEADER + [""] + entries) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=".commit-log-", dir=str(changes_dir))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        os.replace(tmp_name, str(log_path))
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-except Exception:
-    pass
-sys.exit(0)
-PY
-EOF
-    chmod +x "$POST_COMMIT_HOOK"
-    echo "📝 Installed local Git post-commit context hook: $POST_COMMIT_HOOK"
-    if [[ ! -f "$TARGET_DIR/.context/changes/commit-log.md" ]] && git -C "$TARGET_DIR" rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      (cd "$TARGET_DIR" && "$POST_COMMIT_HOOK" --seed) || true
-    fi
-  else
-    echo "⏭️  Preserved custom post-commit hook: $POST_COMMIT_HOOK"
+  if [[ -f "$POST_COMMIT_HOOK" ]] && grep -q "# coding-base-hook" "$POST_COMMIT_HOOK" 2>/dev/null; then
+    rm -f "$POST_COMMIT_HOOK"
+    echo "🧹 Removed legacy post-commit hook: $POST_COMMIT_HOOK"
   fi
 fi
 
