@@ -31,13 +31,17 @@ CODE_EXTENSIONS = {
     ".java", ".kt", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".cs", ".cpp", ".c", ".h"
 }
 
-# Ignore list for common language keywords and standard methods
+# Ignore list for common language keywords and generic CRUD/utility methods
 IGNORED_SYMBOLS = {
     "if", "for", "while", "switch", "catch", "return", "throw", "assert",
     "constructor", "render", "setup", "build", "run", "execute", "handle",
     "get", "set", "id", "name", "toString", "equals", "hashCode", "clone",
     "componentDidMount", "componentWillUnmount", "ngOnInit", "ngOnDestroy",
-    "main", "init", "close", "open", "read", "write", "export", "default"
+    "main", "init", "close", "open", "read", "write", "export", "default",
+    "create", "update", "delete", "remove", "save", "find", "list", "load",
+    "fetch", "parse", "format", "validate", "map", "filter", "reduce",
+    "apply", "process", "reset", "clear", "start", "stop", "send", "emit",
+    "on", "off", "toDto", "toEntity", "toResponse", "fromDto",
 }
 
 # Statements that cannot be method definitions
@@ -58,7 +62,7 @@ FUNCTION_PATTERNS = [
     ),
     # TypeScript / JavaScript functions and arrow functions
     re.compile(
-        r"^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function\s+([a-zA-Z_][a-zA-Z0-9_]*)|"
+        r"^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:<[^>]+>)?\s*\(|"
         r"(?:const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\([^)]*\)(?:\s*:\s*[\w<>\[\],\s\?|&]+)?\s*=>|"
         r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*\{)"
     ),
@@ -104,35 +108,34 @@ def is_git_repo(repo_root: Path) -> bool:
         return False
 
 
-def get_git_diff_ranges(repo_root: Path, base: Optional[str] = None) -> Dict[str, List[Tuple[int, int]]]:
-    """
-    Parse git diff into mapping: relative_file_path -> list of (start_line, end_line) ranges.
-    Diffs working tree against HEAD or specified base.
-    """
-    cmd = ["git", "diff", "--unified=0"]
-    if base:
-        cmd.append(base)
-    cmd.append("--")
-
+def has_git_head(repo_root: Path) -> bool:
+    """Return True if HEAD resolves to an existing commit."""
     try:
         res = subprocess.run(
-            cmd,
+            ["git", "rev-parse", "--verify", "HEAD"],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
             check=False,
-            encoding="utf-8",
-            errors="replace",
         )
-        diff_text = res.stdout
+        return res.returncode == 0
     except Exception:
-        return {}
+        return False
 
-    # If unstaged diff is empty and no base specified, also check staged changes
-    if not diff_text.strip() and not base:
+
+def get_unified_diff(
+    repo_root: Path, base: Optional[str] = None, paths: Optional[List[str]] = None
+) -> str:
+    """Return unified=0 diff against base/HEAD (combining staged+unstaged changes)."""
+    if paths is not None and len(paths) == 0:
+        return ""
+    path_args = ["--"] + paths if paths else ["--"]
+    ref = base or ("HEAD" if has_git_head(repo_root) else None)
+
+    if ref:
         try:
-            res_cached = subprocess.run(
-                ["git", "diff", "--cached", "--unified=0", "--"],
+            res = subprocess.run(
+                ["git", "diff", "--unified=0", ref] + path_args,
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,
@@ -140,9 +143,35 @@ def get_git_diff_ranges(repo_root: Path, base: Optional[str] = None) -> Dict[str
                 encoding="utf-8",
                 errors="replace",
             )
-            diff_text = res_cached.stdout
+            return res.stdout
+        except Exception:
+            return ""
+
+    chunks: List[str] = []
+    for extra_flag in ([], ["--cached"]):
+        try:
+            res = subprocess.run(
+                ["git", "diff", "--unified=0"] + extra_flag + path_args,
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if res.stdout:
+                chunks.append(res.stdout)
         except Exception:
             pass
+    return "\n".join(chunks)
+
+
+def get_git_diff_ranges(repo_root: Path, base: Optional[str] = None) -> Dict[str, List[Tuple[int, int]]]:
+    """
+    Parse git diff into mapping: relative_file_path -> list of (start_line, end_line) ranges.
+    Diffs working tree against HEAD (or specified base).
+    """
+    diff_text = get_unified_diff(repo_root, base)
 
     ranges: Dict[str, List[Tuple[int, int]]] = {}
     current_file: Optional[str] = None
@@ -188,36 +217,31 @@ def get_git_diff_ranges(repo_root: Path, base: Optional[str] = None) -> Dict[str
 def get_changed_files(repo_root: Path, base: Optional[str] = None) -> Set[str]:
     """Get list of changed files relative to repo root."""
     files: Set[str] = set()
-    cmd = ["git", "diff", "--name-only"]
-    if base:
-        cmd.append(base)
-    cmd.append("--")
-    try:
-        res = subprocess.run(
-            cmd,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        for line in res.stdout.splitlines():
-            f = line.strip()
-            if f:
-                files.add(f)
-    except Exception:
-        pass
 
-    # Also include staged if base not specified
-    if not base:
+    if base:
+        cmds = [["git", "diff", base, "--name-only", "--"]]
+    elif has_git_head(repo_root):
+        cmds = [
+            ["git", "diff", "HEAD", "--name-only", "--"],
+            ["git", "ls-files", "--others", "--exclude-standard"],
+        ]
+    else:
+        cmds = [
+            ["git", "diff", "--name-only", "--"],
+            ["git", "diff", "--cached", "--name-only", "--"],
+            ["git", "ls-files", "--others", "--exclude-standard"],
+        ]
+
+    for cmd in cmds:
         try:
-            res_cached = subprocess.run(
-                ["git", "diff", "--cached", "--name-only", "--"],
+            res = subprocess.run(
+                cmd,
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            for line in res_cached.stdout.splitlines():
+            for line in res.stdout.splitlines():
                 f = line.strip()
                 if f:
                     files.add(f)
@@ -225,6 +249,287 @@ def get_changed_files(repo_root: Path, base: Optional[str] = None) -> Set[str]:
             pass
 
     return files
+
+
+def get_file_diff_lines(
+    repo_root: Path, rel_path: str, base: Optional[str] = None
+) -> Tuple[List[str], List[str]]:
+    """Return (removed_lines, added_lines) for rel_path from unified git diff."""
+    diff_text = get_unified_diff(repo_root, base, paths=[rel_path])
+
+    removed: List[str] = []
+    added: List[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("-") and not line.startswith("---"):
+            removed.append(line[1:])
+        elif line.startswith("+") and not line.startswith("+++"):
+            added.append(line[1:])
+    return (removed, added)
+
+
+def _extract_fn_def_params(line: str, sym_name: str) -> Optional[str]:
+    """Extract balanced parameter list from a function/method definition line for sym_name."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith(("//", "/*", "*", "#")):
+        return None
+    first_word = stripped.split()[0]
+    if first_word in STATEMENT_KEYWORDS or first_word in {"else", "elif", "case", "do", "try"}:
+        return None
+
+    esc = re.escape(sym_name)
+    kw_pat = re.compile(
+        rf"^\s*(?:export\s+(?:default\s+)?)?(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?(?:def|function|fn)\s+{esc}\s*(?:<[^>]*>)?\s*\("
+    )
+    go_pat = re.compile(rf"^func\s+(?:\([^)]+\)\s+)?{esc}\s*(?:\[[^\]]*\]\s*)?\(")
+    arrow_pat = re.compile(
+        rf"^\s*(?:export\s+(?:default\s+)?)?(?:const|let|var)\s+{esc}\s*(?::[^=]+)?=\s*(?:async\s*)?(?:<[^>]*>\s*)?\("
+    )
+    typed_pat = re.compile(
+        rf"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|private|protected|static|final|synchronized|abstract|default|async|override)\s+)*(?:[a-zA-Z_][\w<>\[\],\s\?]*)\s+{esc}\s*(?:<[^>]*>)?\s*\("
+    )
+    bare_method_pat = re.compile(rf"^\s*(?:async\s+)?{esc}\s*(?:<[^>]*>)?\s*\(")
+
+    kind = None
+    open_idx = -1
+    for pkind, pat in (
+        ("kw", kw_pat),
+        ("go", go_pat),
+        ("arrow", arrow_pat),
+        ("typed", typed_pat),
+        ("bare", bare_method_pat),
+    ):
+        m = pat.match(line)
+        if m:
+            kind = pkind
+            open_idx = m.end() - 1
+            break
+
+    if kind is None or open_idx < 0:
+        return None
+
+    depth = 0
+    in_quote: Optional[str] = None
+    escaped = False
+    close_idx: Optional[int] = None
+    for idx in range(open_idx, len(line)):
+        ch = line[idx]
+        if in_quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == in_quote:
+                in_quote = None
+            continue
+        if ch in ("'", '"', "`"):
+            in_quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                close_idx = idx
+                break
+
+    if close_idx is None:
+        return None
+
+    tail = line[close_idx + 1:]
+    if kind == "arrow" and "=>" not in tail:
+        return None
+    if kind == "bare" and not re.match(r"^(?:\s*:\s*[^\{]+)?\s*\{", tail):
+        return None
+
+    return line[open_idx + 1:close_idx]
+
+
+def _split_top_level_params(params_str: str) -> List[str]:
+    """Split comma-separated parameters while respecting strings, => arrows, and nested brackets."""
+    parts: List[str] = []
+    current: List[str] = []
+    paren_brace_depth = 0
+    angle_depth = 0
+    seen_default_eq = False
+    in_quote: Optional[str] = None
+    escaped = False
+    n = len(params_str)
+    i = 0
+
+    while i < n:
+        ch = params_str[i]
+        if in_quote:
+            current.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+
+        if ch in ("'", '"', "`"):
+            in_quote = ch
+            current.append(ch)
+            i += 1
+            continue
+
+        if ch == "=" and i + 1 < n and params_str[i + 1] == ">":
+            current.append("=>")
+            i += 2
+            continue
+
+        if ch in "([{":
+            paren_brace_depth += 1
+            current.append(ch)
+        elif ch in ")]}":
+            paren_brace_depth = max(0, paren_brace_depth - 1)
+            current.append(ch)
+        elif ch == "<" and not seen_default_eq and paren_brace_depth == 0:
+            angle_depth += 1
+            current.append(ch)
+        elif ch == ">" and not seen_default_eq and paren_brace_depth == 0:
+            angle_depth = max(0, angle_depth - 1)
+            current.append(ch)
+        elif ch == "=" and paren_brace_depth == 0 and angle_depth == 0:
+            prev_ch = params_str[i - 1] if i > 0 else ""
+            next_ch = params_str[i + 1] if i + 1 < n else ""
+            if prev_ch not in ("=", "!", "<", ">") and next_ch != "=":
+                seen_default_eq = True
+            current.append(ch)
+        elif ch == "," and paren_brace_depth == 0 and angle_depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            seen_default_eq = False
+        else:
+            current.append(ch)
+        i += 1
+
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _is_optional_param(param: str) -> bool:
+    """Return True strictly when a parameter declaration is optional, defaulted, or variadic."""
+    p = param.strip()
+    if not p:
+        return False
+    if p.startswith("*") or p.startswith("..."):
+        return True
+    if re.match(
+        r"^(?:(?:public|private|protected|readonly)\s+)?[a-zA-Z_$][a-zA-Z0-9_$]*\s*\?(?:\s*:|$)",
+        p,
+    ):
+        return True
+
+    paren_brace_depth = 0
+    angle_depth = 0
+    in_quote: Optional[str] = None
+    escaped = False
+    n = len(p)
+    i = 0
+
+    while i < n:
+        ch = p[i]
+        if in_quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+
+        if ch in ("'", '"', "`"):
+            in_quote = ch
+            i += 1
+            continue
+
+        if ch == "=" and i + 1 < n and p[i + 1] == ">":
+            i += 2
+            continue
+
+        if ch in "([{":
+            paren_brace_depth += 1
+        elif ch in ")]}":
+            paren_brace_depth = max(0, paren_brace_depth - 1)
+        elif ch == "<" and paren_brace_depth == 0:
+            angle_depth += 1
+        elif ch == ">" and paren_brace_depth == 0:
+            angle_depth = max(0, angle_depth - 1)
+        elif ch == "=" and paren_brace_depth == 0 and angle_depth == 0:
+            prev_ch = p[i - 1] if i > 0 else ""
+            next_ch = p[i + 1] if i + 1 < n else ""
+            if prev_ch not in ("=", "!", "<", ">") and next_ch not in ("=", ">"):
+                return True
+        i += 1
+
+    return False
+
+
+def is_compatible_signature_edit(
+    removed_lines: List[str], added_lines: List[str], sym_name: str
+) -> bool:
+    """Return True only when a signature edit strictly preserves existing caller compatibility."""
+    if not sym_name or not added_lines:
+        return False
+
+    old_params: Optional[str] = None
+    for line in removed_lines:
+        extracted = _extract_fn_def_params(line, sym_name)
+        if extracted is not None:
+            old_params = extracted
+            break
+
+    new_params: Optional[str] = None
+    for line in added_lines:
+        extracted = _extract_fn_def_params(line, sym_name)
+        if extracted is not None:
+            new_params = extracted
+            break
+
+    if old_params is None or new_params is None:
+        return False
+
+    old_list = [re.sub(r"\s+", " ", p).strip() for p in _split_top_level_params(old_params)]
+    new_list = [re.sub(r"\s+", " ", p).strip() for p in _split_top_level_params(new_params)]
+
+    if len(new_list) < len(old_list) or new_list[:len(old_list)] != old_list:
+        return False
+
+    extra = new_list[len(old_list):]
+    return True if not extra else all(_is_optional_param(p) for p in extra)
+
+
+def parse_contract_doc(repo_root: Path) -> str:
+    """Parse CONTRACT_DOC path from .context/project.md, returning a clear fallback."""
+    project_md = repo_root / ".context" / "project.md"
+    header_re = re.compile(
+        r"^\s*(?:[-*]\s+)?[*`]*CONTRACT_DOC[*`]*(?:\s*\([^)\n\r]*\))?[*`]*\s*:\**\s*(.*)$"
+    )
+    if project_md.is_file():
+        try:
+            with open(project_md, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = header_re.match(line)
+                    if not m:
+                        continue
+                    rest = m.group(1).strip()
+                    if "`" in rest:
+                        spans = [s.strip() for s in re.findall(r"`([^`]+)`", rest) if s.strip()]
+                        val = spans[0] if spans else ""
+                    else:
+                        val = rest.strip("'\"")
+                    if val and val.upper() != "TBD" and val not in ("*", "**"):
+                        return val
+        except Exception:
+            pass
+    return "CONTRACT_DOC in .context/project.md"
 
 
 def parse_cross_repo_consumers(repo_root: Path, consumers_arg: Optional[str] = None) -> List[Path]:
@@ -265,6 +570,7 @@ def analyze_with_graph_db(
     repo_root: Path,
     diff_ranges: Dict[str, List[Tuple[int, int]]],
     changed_files: Set[str],
+    base: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Query .code-review-graph/graph.db for changed nodes and un-updated callers."""
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -275,6 +581,7 @@ def analyze_with_graph_db(
     missing_test_updates: List[Dict[str, Any]] = []
     tests_updated: List[Dict[str, Any]] = []
     impacted_files: Set[str] = set()
+    diff_lines_cache: Dict[str, Tuple[List[str], List[str]]] = {}
 
     for rel_path, ranges in diff_ranges.items():
         ext = os.path.splitext(rel_path)[1].lower()
@@ -301,8 +608,14 @@ def analyze_with_graph_db(
             if not overlaps:
                 continue
 
-            # Detect whether signature line itself changed
+            # Detect whether signature line itself changed and whether it breaks compatibility
             sig_changed = any(ls >= start and ls <= end for start, end in ranges)
+            sig_breaking = False
+            if sig_changed:
+                if rel_path not in diff_lines_cache:
+                    diff_lines_cache[rel_path] = get_file_diff_lines(repo_root, rel_path, base=base)
+                rem_lines, add_lines = diff_lines_cache[rel_path]
+                sig_breaking = not is_compatible_signature_edit(rem_lines, add_lines, name)
 
             node_dict = {
                 "id": nid,
@@ -315,6 +628,7 @@ def analyze_with_graph_db(
                 "line_start": ls,
                 "line_end": le,
                 "signature_changed": sig_changed,
+                "signature_breaking": sig_breaking,
             }
             changed_nodes.append(node_dict)
 
@@ -368,6 +682,7 @@ def analyze_with_graph_db(
                             "caller_line": caller["line"],
                             "caller_symbol": caller["source"],
                             "signature_changed": sig_changed,
+                            "signature_breaking": sig_breaking,
                         }
                     )
 
@@ -597,6 +912,7 @@ def analyze_with_fallback(
 
     MAX_BODY_QUERIES = 999999 if strict else 25
     body_queries_count = 0
+    diff_lines_cache: Dict[str, Tuple[List[str], List[str]]] = {}
 
     for rel_path, ranges in diff_ranges.items():
         ext = os.path.splitext(rel_path)[1].lower()
@@ -641,6 +957,7 @@ def analyze_with_fallback(
                         "line": sym_line,
                         "is_private": is_private,
                         "signature_changed": True,  # Deletion is always a breaking signature change
+                        "signature_breaking": True,
                         "deleted": True,
                     }
                     changed_symbols.append(sym_dict)
@@ -659,6 +976,7 @@ def analyze_with_fallback(
                                 "caller_line": c["line"],
                                 "caller_symbol": c.get("content", ""),
                                 "signature_changed": True,
+                                "signature_breaking": True,
                             })
 
                     for t in tests:
@@ -689,6 +1007,7 @@ def analyze_with_fallback(
                             "line": line_idx + 1,
                             "is_private": False,
                             "signature_changed": True,
+                            "signature_breaking": True,
                             "deleted": True,
                         })
             continue
@@ -713,6 +1032,12 @@ def analyze_with_fallback(
 
                 # Signature changed if changed ranges overlap the signature lines [sym_line, sig_end_line]
                 sig_changed = any(s <= sig_end_line and e >= sym_line for s, e in ranges)
+                sig_breaking = False
+                if sig_changed:
+                    if rel_path not in diff_lines_cache:
+                        diff_lines_cache[rel_path] = get_file_diff_lines(repo_root, rel_path, base=base)
+                    rem_lines, add_lines = diff_lines_cache[rel_path]
+                    sig_breaking = not is_compatible_signature_edit(rem_lines, add_lines, sym_name)
 
                 sym_dict = {
                     "symbol": sym_name,
@@ -722,6 +1047,7 @@ def analyze_with_fallback(
                     "line": sym_line,
                     "is_private": is_private,
                     "signature_changed": sig_changed,
+                    "signature_breaking": sig_breaking,
                 }
                 changed_symbols.append(sym_dict)
 
@@ -744,6 +1070,7 @@ def analyze_with_fallback(
                             "caller_line": c["line"],
                             "caller_symbol": c.get("content", ""),
                             "signature_changed": sig_changed,
+                            "signature_breaking": sig_breaking,
                         })
 
                 for t in tests:
@@ -776,6 +1103,7 @@ def analyze_with_fallback(
                             "line": line_idx + 1,
                             "is_private": False,
                             "signature_changed": True,
+                            "signature_breaking": True,
                         })
 
     return {
@@ -795,44 +1123,14 @@ def analyze_with_fallback(
 # ---------------------------------------------------------------------------
 
 
-def extract_deleted_symbols_from_diff(repo_root: Path, base: Optional[str] = None) -> List[str]:
+def extract_deleted_symbols_from_diff(
+    repo_root: Path, base: Optional[str] = None, paths: Optional[List[str]] = None
+) -> List[str]:
     """
     Extract deleted or replaced symbols (API endpoints, DTO fields, Enum literals, function names)
     from '-' lines in git diff to verify external consumer repositories.
     """
-    cmd = ["git", "diff", "--unified=0"]
-    if base:
-        cmd.append(base)
-    cmd.append("--")
-
-    try:
-        res = subprocess.run(
-            cmd,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            encoding="utf-8",
-            errors="replace",
-        )
-        diff_text = res.stdout
-    except Exception:
-        return []
-
-    if not diff_text.strip() and not base:
-        try:
-            res_cached = subprocess.run(
-                ["git", "diff", "--cached", "--unified=0", "--"],
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                check=False,
-                encoding="utf-8",
-                errors="replace",
-            )
-            diff_text = res_cached.stdout
-        except Exception:
-            pass
+    diff_text = get_unified_diff(repo_root, base, paths=paths)
 
     deleted_symbols: Set[str] = set()
     enum_pattern = re.compile(r"^\s*([A-Z][A-Z0-9_]{2,})\s*[,;]?$")
@@ -1050,10 +1348,11 @@ def run_blast_radius_check(
             for t in tests[:5]:
                 print(f"   - {t['file']}:{t['line']}")
             if cross_impacts:
+                contract_doc = parse_contract_doc(repo_root)
                 print(f"\n🌐 [CROSS-REPO CONSUMERS] ({len(cross_impacts)} occurrences):")
                 for ci in cross_impacts[:10]:
                     print(f"   - [{ci['consumer']}] {ci['file']}:{ci['line']} -> {ci['content']}")
-                print("   👉 Verify contract documentation (fe-guide-combined.md) and consumer compatibility.")
+                print(f"   👉 Verify contract documentation ({contract_doc}) and consumer compatibility.")
             elif consumer_repos:
                 print(f"\n🌐 [CROSS-REPO CONSUMERS] 0 occurrences found across {len(consumer_repos)} consumer repos.")
         return 0
@@ -1064,8 +1363,9 @@ def run_blast_radius_check(
 
     # Optional multi-session file scoping (via --files or VERIFY_FILES env var)
     scoped_files_raw = files_arg or os.environ.get("VERIFY_FILES", "")
+    scoped_set: Optional[Set[str]] = None
     if scoped_files_raw.strip():
-        scoped_set = {f.strip().lstrip("./") for f in re.split(r"[\s,]+", scoped_files_raw.strip()) if f.strip()}
+        scoped_set = {re.sub(r"^\./+", "", f.strip()) for f in re.split(r"[\s,]+", scoped_files_raw.strip()) if f.strip()}
         diff_ranges = {k: v for k, v in diff_ranges.items() if k in scoped_set}
         changed_files = {f for f in changed_files if f in scoped_set}
 
@@ -1101,7 +1401,7 @@ def run_blast_radius_check(
 
     if use_graph_db:
         try:
-            result = analyze_with_graph_db(graph_db_path, repo_root, diff_ranges, changed_files)
+            result = analyze_with_graph_db(graph_db_path, repo_root, diff_ranges, changed_files, base=base)
         except Exception as e:
             print(f"⚠️  [BLAST RADIUS] Failed querying graph.db ({e}). Falling back to git grep...")
             result = analyze_with_fallback(repo_root, diff_ranges, changed_files, strict=strict, base=base)
@@ -1111,7 +1411,9 @@ def run_blast_radius_check(
     # 5. Check Cross-Repo Consumers if configured
     consumer_repos = parse_cross_repo_consumers(repo_root, consumers_arg)
     changed_sym_names = [n.get("name") or n.get("symbol") for n in result["changed_nodes"] if (n.get("name") or n.get("symbol"))]
-    deleted_diff_symbols = extract_deleted_symbols_from_diff(repo_root, base)
+    deleted_diff_symbols = extract_deleted_symbols_from_diff(
+        repo_root, base, paths=sorted(scoped_set) if scoped_set is not None else None
+    )
     all_scan_symbols = list(dict.fromkeys(changed_sym_names + deleted_diff_symbols))
 
     cross_impacts: List[Dict[str, Any]] = []
@@ -1120,13 +1422,19 @@ def run_blast_radius_check(
     result["cross_repo_impacts"] = cross_impacts
 
     # 6. Evaluate Blocking vs Warning Conditions
-    fatal_callers = [c for c in result["un_updated_callers"] if c.get("signature_changed", True)]
-    body_callers = [c for c in result["un_updated_callers"] if not c.get("signature_changed", False)]
+    breaking_callers = [
+        c for c in result["un_updated_callers"]
+        if c.get("signature_breaking", c.get("signature_changed", False))
+    ]
+    non_breaking_callers = [
+        c for c in result["un_updated_callers"]
+        if not c.get("signature_breaking", c.get("signature_changed", False))
+    ]
 
     has_fatal = False
     if strict and (result["un_updated_callers"] or result["missing_test_updates"]):
         has_fatal = True
-    elif mode == "gate" and fatal_callers:
+    elif mode == "gate" and result["engine"] == "graph_db" and breaking_callers:
         has_fatal = True
 
     status_str = "FAIL" if has_fatal else ("WARN" if (result["un_updated_callers"] or result["missing_test_updates"] or cross_impacts) else "PASS")
@@ -1155,20 +1463,29 @@ def run_blast_radius_check(
     for node in result["changed_nodes"][:5]:
         sym = node.get("name") or node.get("symbol")
         fp = node.get("file_path") or node.get("defined_in")
-        sig_info = " (SIGNATURE CHANGED)" if node.get("signature_changed") else " (internal body)"
+        if node.get("signature_changed"):
+            sig_info = " (SIGNATURE CHANGED)" if node.get("signature_breaking", True) else " (compatible signature edit)"
+        else:
+            sig_info = " (internal body)"
         print(f"   - Modified: {sym} in {fp}{sig_info}")
 
     # Un-updated callers section
-    if fatal_callers:
-        print(f"\n❌ [FATAL BLAST RADIUS] Un-updated external callers with broken signatures ({len(fatal_callers)} call sites):")
-        for c in fatal_callers[:8]:
+    if breaking_callers and has_fatal:
+        print(f"\n❌ [FATAL BLAST RADIUS] Un-updated external callers with broken signatures ({len(breaking_callers)} call sites):")
+        for c in breaking_callers[:8]:
             print(f"   ❌ {c['caller_file']}:{c['caller_line']} calls '{c['symbol']}' (defined in {c['defined_in']})")
-        if len(fatal_callers) > 8:
-            print(f"   ... and {len(fatal_callers) - 8} more.")
+        if len(breaking_callers) > 8:
+            print(f"   ... and {len(breaking_callers) - 8} more.")
+    elif breaking_callers:
+        print(f"\n⚠️  [HIGH RISK BLAST RADIUS] Heuristic grep found un-updated callers on modified signatures ({len(breaking_callers)} call sites; verify compatibility or pass --strict / build graph.db):")
+        for c in breaking_callers[:8]:
+            print(f"   ⚠️  {c['caller_file']}:{c['caller_line']} calls '{c['symbol']}' (defined in {c['defined_in']})")
+        if len(breaking_callers) > 8:
+            print(f"   ... and {len(breaking_callers) - 8} more.")
 
-    if body_callers:
-        print(f"\n⚠️  [HIGH RISK] Un-updated external callers on internal body change ({len(body_callers)} call sites):")
-        for c in body_callers[:5]:
+    if non_breaking_callers:
+        print(f"\n⚠️  [HIGH RISK] Un-updated external callers on compatible/body change ({len(non_breaking_callers)} call sites):")
+        for c in non_breaking_callers[:5]:
             print(f"   ⚠️  {c['caller_file']}:{c['caller_line']} calls '{c['symbol']}'")
 
     # Missing test updates
@@ -1180,11 +1497,12 @@ def run_blast_radius_check(
 
     # Cross-repo impacts
     if cross_impacts:
+        contract_doc = parse_contract_doc(repo_root)
         print(f"\n🌐 [CROSS-REPO CONSUMER IMPACT] Detected {len(cross_impacts)} consumer references:")
         for ci in cross_impacts[:8]:
             tag = " (DELETED/REPLACED CONTRACT)" if ci.get("is_deleted_contract") else ""
             print(f"   🌐 [{ci['consumer']}] {ci['file']}:{ci['line']} references '{ci['symbol']}'{tag}")
-        print("   👉 Verify contract documentation (fe-guide-combined.md) and consumer compatibility.")
+        print(f"   👉 Verify contract documentation ({contract_doc}) and consumer compatibility.")
 
     if has_fatal:
         print("\n⛔ [GATE BLOCKED] External callers exist that were NOT updated after signature changes.")

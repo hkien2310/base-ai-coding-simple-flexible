@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 .code-review-graph/
+.context/changes/commit-log.md
