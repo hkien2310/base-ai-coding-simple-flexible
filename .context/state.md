@@ -1,12 +1,8 @@
-# Live Session State (Max 30 Lines — Prefer git worktree for Parallel Tasks; Update ONLY Your Row)
+# Session State — Active Work & Open Blockers Only
 
-## Active In-Flight Sessions (Shared-Tree Coordination)
-| Session / Task Slug | Lane (`Fast`\|`Spec`) | Stage (`PLAN`\|`EXEC`\|`REVIEW`\|`READY`) | Locked / Touched Files | Next Action |
+| Session / Task | Lane (Fast\|Plan) | Stage (PLAN\|EXEC\|READY\|IDLE) | Locked / Touched Files | Next Action |
 | :--- | :--- | :--- | :--- | :--- |
-| `none` | — | `IDLE` | — | Ready for new tasks |
+| `none` | — | `IDLE` | — | Awaiting user task |
 
-## Recently Completed (Keep Last 3 Only)
-- Initialized Universal Project Harness (`STATUS: READY`)
-
-## Global Blockers / Open Decisions
+## Open Blockers / Pending Ops
 - None

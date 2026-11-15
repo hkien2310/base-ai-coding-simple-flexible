@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 5-Step Mechanical Quality & Anti-Cheat Gatekeeper for AI Coding Agents
-# Blocks fake tests, untracked test cheats, un-updated callers, unlogged rule edits, and broken builds.
+# 3-Step Mechanical Quality & Anti-Cheat Gatekeeper
+# Checks diff/untracked tests & active plans, governance log sync, and project VERIFY_CMD.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -46,7 +46,7 @@ PY
   fi
 fi
 
-echo "🔍 [1/5] Checking Git Diff & Untracked Test Files for AI Test-Cheating Patterns..."
+echo "🔍 [1/3] Checking Tests & Active Plan Integrity..."
 if [[ "$IS_GIT" -eq 1 && -n "$SCOPED_FILES" ]]; then
   if ! SCOPED_FILES="$SCOPED_FILES" HAS_HEAD="$HAS_HEAD" RED="$RED" YELLOW="$YELLOW" NC="$NC" python3 - <<'PY'
 import os, re, subprocess, sys
@@ -124,15 +124,6 @@ PY
   fi
 fi
 
-echo "🔍 [2/5] Checking Mechanical Blast-Radius & Caller Integrity..."
-if [[ -f ".context/check-blast-radius.py" ]]; then
-  if ! python3 .context/check-blast-radius.py --mode gate; then
-    echo -e "${RED}❌ [FATAL] Mechanical blast-radius check failed! Un-updated callers or missing test updates detected.${NC}"
-    FAILED=1
-  fi
-fi
-
-echo "🔍 [3/5] Checking Spec-to-Test Contract Traceability..."
 if ! SCOPED_FILES="$SCOPED_FILES" VERIFY_SPEC="${VERIFY_SPEC:-}" RED="$RED" GREEN="$GREEN" NC="$NC" python3 - <<'PY'
 import glob, os, re, sys
 
@@ -150,7 +141,7 @@ if verify_spec:
             target_specs.append(candidate)
 elif os.path.isdir(".context/changes") and scoped_files:
     basenames = {os.path.basename(f) for f in scoped_files}
-    status_re = re.compile(r"^\-\s+\*\*Status:\*\*\s*(APPROVED|IN_PROGRESS)\b", re.MULTILINE)
+    status_re = re.compile(r"^(?:[-*]\s+)?[*`]*Status[*`]*:\**\s*(APPROVED|IN_PROGRESS)\b", re.MULTILINE)
     for spec in sorted(glob.glob(".context/changes/*.md")):
         base = os.path.basename(spec)
         if base in ("_TEMPLATE.md", "rules-log.md"):
@@ -163,21 +154,23 @@ elif os.path.isdir(".context/changes") and scoped_files:
         if status_re.search(content) and any(bn in content for bn in basenames):
             target_specs.append(spec)
 
-tc_fail_re = re.compile(r"^\| *`?TC-[0-9]+`? *\|.*(\buntested\b|\bfail\b|\bTBD\b)")
+bt = chr(96)
+tc_fail_re = re.compile(rf"^\| *{bt}?TC-[0-9]+{bt}? *\|.*(\buntested\b|\bfail\b|\bTBD\b)")
+unchecked_re = re.compile(r"^\s*[-*]\s*\[\s\]\s+")
 spec_failed = False
 for spec in target_specs:
     try:
         with open(spec, "r", encoding="utf-8", errors="replace") as f:
-            bad_rows = [ln.rstrip() for ln in f if tc_fail_re.match(ln)]
+            bad_rows = [ln.rstrip() for ln in f if tc_fail_re.match(ln) or unchecked_re.match(ln)]
     except OSError:
         continue
     if bad_rows:
-        print(f"{RED}❌ [FATAL] Active Spec ({spec}) still has unverified or TBD test cases:{NC}")
+        print(f"{RED}❌ [FATAL] Active Plan ({spec}) still has incomplete items or TBD test cases:{NC}")
         for row in bad_rows:
             print(f"   {row}")
         spec_failed = True
     else:
-        print(f"{GREEN}✅ All TC-xx rows in {spec} are mapped and marked pass.{NC}")
+        print(f"{GREEN}✅ Active Plan ({spec}) has zero incomplete items.{NC}")
 
 if spec_failed:
     sys.exit(1)
@@ -186,7 +179,7 @@ then
   FAILED=1
 fi
 
-echo "🔍 [4/5] Checking Governance Change Log (rules-log.md) Sync..."
+echo "🔍 [2/3] Checking Governance Change Log (rules-log.md) Sync..."
 if [[ "$IS_GIT" -eq 1 && -n "$SCOPED_FILES" ]]; then
   if ! SCOPED_FILES="$SCOPED_FILES" HAS_HEAD="$HAS_HEAD" RED="$RED" NC="$NC" python3 - <<'PY'
 import datetime, fnmatch, os, re, subprocess, sys
@@ -244,7 +237,7 @@ def parse_governance_docs():
                     raw_items = rest.split(",")
                 for raw_item in raw_items:
                     cleaned = re.sub(r"^\./+", "", raw_item.strip().strip("'\""))
-                    if cleaned and cleaned.upper() != "TBD" and cleaned not in ("*", "**"):
+                    if cleaned and cleaned.upper() not in ("TBD", "NONE") and cleaned not in ("*", "**"):
                         patterns.append(cleaned)
                 break
     except OSError:
@@ -266,7 +259,7 @@ def is_mode0_onboarding():
 gov_patterns = parse_governance_docs()
 
 def matches_gov(path):
-    if path == RULES_LOG:
+    if path == RULES_LOG or path.startswith(".agents/teamwork/"):
         return False
     if is_initial_harness_install and path in HARNESS_INSTALL_FILES and not is_in_head(path):
         return False
@@ -377,7 +370,7 @@ PY
   fi
 fi
 
-echo "🔍 [5/5] Running Project VERIFY_CMD from .context/project.md..."
+echo "🔍 [3/3] Running Project VERIFY_CMD from .context/project.md..."
 if [[ -f ".context/project.md" ]]; then
   VERIFY_CMD=$(python3 - <<'PY'
 import re

@@ -1,121 +1,60 @@
-# Base AI Coding — Simple & Flexible Agentic Harness
+# Universal Project Harness (`coding-base`)
 
-A minimal, zero-dependency project harness for AI coding agents (**Antigravity, Claude Code, Cursor, OpenCode, Codex**). Works out of the box for both **Greenfield** and **Brownfield** repositories.
-
-## Key Features
-
-1. **Additive Coexistence (Never Overwrites Existing Rules):**
-   - If the target project already has `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`, `inject.sh` leaves them untouched and installs the harness into `.agents/rules/coding-base.md`, `.claude/rules/coding-base.md`, and `.cursor/rules/coding-base.mdc`.
-2. **Git Stealth Mode or Solo `--track` Mode:**
-   - **Stealth (default):** Hides harness files via `.git/info/exclude` (including `git worktree` setups). `git status` stays clean with zero noise in team PRs.
-   - **Tracked (`--track`):** Removes stealth exclusions so solo or private repos can commit and push `.context/` and harness rules to Git (while keeping `.code-review-graph/` ignored). `--upgrade` and `--force` preserve the repo's active mode.
-3. **Multi-Session Concurrency (`git worktree` First):**
-   - Uses isolated `git worktree` / `Workspace: "share"` checkouts as the primary mechanism for parallel work so diffs and builds never collide; when sharing a working tree, coordinates via the `Active In-Flight Sessions` table in `.context/state.md` and full-pipeline scoped verification (`VERIFY_FILES`, `VERIFY_SPEC`).
-4. **2-End Session Lifecycle:**
-   - **Start-of-Session:** Automatically archives previous `READY` tasks (with commit ref) into `Recently Completed` when you move on to a new task, or resumes an active row without stepping on concurrent sessions.
-   - **End-of-Turn:** Runs the mechanical gatekeeper + live E2E verification (DB/API/Browser), then parks the task row as `READY` so you can still request follow-up tweaks before it closes.
-5. **Governance Change Log (Mechanically Enforced):**
-   - Any edit to `AGENTS.md`, `CLAUDE.md`, `.agents/**`, `.context/project.md`, or docs listed in `GOVERNANCE_DOCS` gets a one-line entry with `[base: <short-sha>]` at the top of `.context/changes/rules-log.md` (what changed, why, what it replaced), verified mechanically by `verify-gate.sh` (except initial Mode 0 `UNINITIALIZED` → `READY` onboarding). Agents read the top entries before touching rules, so deliberate decisions don't get silently reverted.
-6. **Native Git Per-File Rollback & Milestone Tags:**
-   - Zero duplicate commit-log files or custom `.vault` wrappers: `git log --oneline -- <file>` + `<sha>` / `<sha>~1`, `[base: <sha>]` in `rules-log.md`, `Base Git Ref` in specs, and optional local milestone tags (`git tag ckpt/<slug>`) give exact refs to restore any single file cleanly via `git restore --worktree --source=<ref> -- <file...>`.
-7. **Mechanical Anti-Cheat Gatekeeper (`verify-gate.sh` & `check-blast-radius.py`):**
-   - Blocks `.skip`, `.only`, `@Disabled`, empty `catch {}` blocks, and unauthorized test assertion deletions across both tracked diffs and untracked test files, scoped cleanly by `VERIFY_FILES` across all 5 steps.
-   - Traces caller blast radius via `.code-review-graph/graph.db` (SQLite AST — `FATAL` on breaking signature changes, `WARN` on backward-compatible optional parameter additions) with automatic `WARN`-level fallback to `git diff` + `git grep` (`--strict` to enforce), plus dynamic `CONTRACT_DOC` cross-repo consumer scanning.
-
----
+A minimal, domain-agnostic harness for AI agents working across backend APIs, frontends, CLI/bots, and AI content pipelines. Every project gets a **4-file `.context/` directory** and a **3-step mechanical gatekeeper** without replacing your existing tools or `git log`.
 
 ## Repository Structure
 
 ```text
-base-ai-coding-simple-flexible/
-├── AGENTS.md                      # 2-Lane Router (Fast vs Spec Lane) + 2-End Lifecycle + 5 Test Laws
-├── CLAUDE.md -> AGENTS.md         # Symlink for Claude Code compatibility
-├── inject.sh                      # 1-command installer (Stealth / Upgrade / Track / Force modes)
+coding-base/
+├── AGENTS.md                 # Universal 4-section agent rules (Fast vs Plan lanes, domain guardrails, Git rollback)
+├── CLAUDE.md -> AGENTS.md    # Symlink for Claude Code compatibility
+├── inject.sh                 # Installer / upgrader (--stealth default, --track, --upgrade, --force)
 └── .context/
-    ├── project.md                 # Project map: Stack, VERIFY_CMD, Runtime Sandbox, Error Memory
-    ├── state.md                   # Shared-tree session state table (< 30 lines)
-    ├── verify-gate.sh             # 5-step mechanical gatekeeper (Anti-cheat, Blast-radius, TC-xx, rules-log, VERIFY_CMD)
-    ├── check-blast-radius.py      # Dual-engine caller impact analyzer (SQLite Call Graph + Git Grep)
+    ├── project.md            # Project profile: stack, VERIFY_CMD, GOVERNANCE_DOCS, Error Memory
+    ├── state.md              # Active work & open blockers table only (<= 25 lines; Git log tracks finished work)
+    ├── verify-gate.sh        # 3-step pre-commit / end-of-turn gatekeeper
     └── changes/
-        ├── _TEMPLATE.md           # Delta Spec + Base Git Ref + Spec-to-Test Contract + Cross-Repo Matrix
-        └── rules-log.md           # Reverse-chronological log (newest at top) of every rule / key-doc change
+        └── rules-log.md      # Reverse-chronological audit trail for rule/prompt/governance edits
 ```
 
----
+## Quick Start
 
-## Recommended Companion Skills & MCP Servers
-
-The harness works out of the box with **zero external dependencies** (its core rules and `git grep` fallbacks are baked directly into `AGENTS.md` and `check-blast-radius.py`), but automatically upgrades its capabilities when these companion skills/MCPs are installed:
-
-| Skill / MCP | Role in Harness | Built-in Fallback (If Not Installed) |
-| :--- | :--- | :--- |
-| **`ponytail`** *(Skill)* | Enforces the 7-rung simplicity ladder (YAGNI → reuse existing → stdlib → native → installed dep → 1-liner → minimal code) and `ponytail-review`. | Core 7-rung ladder is embedded directly in `AGENTS.md`. |
-| **`adversarial-verifier`** *(Skill)* | Eliminates sycophancy, stress-tests architecture proposals, and triages review issues into `[FATAL]` vs `[HIGH RISK]`. | Adversarial review prompt & risk triage rules are baked into `AGENTS.md` Mode 2. |
-| **`code-review-graph`** *(MCP / CLI)* | Builds `.code-review-graph/graph.db` (Tree-sitter + SQLite) for instant AST caller/callee impact radius (`get_impact_radius_tool`, `get_review_context_tool`). | `.context/check-blast-radius.py` automatically falls back to `git diff` + `git grep`. |
-| **`chrome-devtools` / Playwright** *(MCP)* | Live browser verification (`list_console_messages`, `list_network_requests`, DOM snapshot) at the End-of-Turn check. | E2E test runner command / `curl` checks defined in `.context/project.md`. |
-| **`humanizer` / `stop-slop`** *(Skill)* | Strips AI writing patterns from documentation, UI copy, and commit messages. | Anti-slop rules embedded in `AGENTS.md`. |
-| **`modern-web-guidance`** *(Skill / CLI)* | Queries Baseline modern Web Platform APIs (`<dialog>`, Popover, Anchor Positioning, View Transitions) on HTML/CSS/UI tasks before writing JS workarounds (skipped on backend/CLI tasks). | Native-platform-first rule (Ponytail Rung 4) embedded in `AGENTS.md`. |
-
----
-
-## Injecting into Any Project
-
-### Option A — Terminal (1 Command)
+Run from `coding-base`:
 
 ```bash
-# 1. Clone once anywhere on your machine
-git clone https://github.com/hkien2310/base-ai-coding-simple-flexible.git ~/coding-base
+# Default Stealth Mode: hidden via .git/info/exclude, coexists with custom AGENTS.md/CLAUDE.md
+./inject.sh /path/to/project
 
-# 2. Inject into any existing or empty project (Default: Stealth + Coexistence)
-~/coding-base/inject.sh /path/to/your-project
+# Tracked Mode: visible to Git so .context/ and rules travel with team commits
+./inject.sh /path/to/project --track
+
+# Upgrade harness rules, verify-gate.sh, hooks & scrub legacy files (preserves project.md/state.md)
+./inject.sh /path/to/project --upgrade
 ```
 
 | Flag | Behavior |
 | :--- | :--- |
-| *(no flag)* / `--stealth` | **Stealth + Coexistence (Default):** Keeps existing `AGENTS.md`/`CLAUDE.md` untouched (installs `.agents/rules/coding-base.md` alongside them) and hides all harness files in `.git/info/exclude`. |
-| `--upgrade` | **Safe Engine Update:** Updates engine files (`AGENTS.md` / `coding-base.md`, `verify-gate.sh`, `check-blast-radius.py`, `_TEMPLATE.md`) + local `pre-commit` hook, strips legacy harness artifacts if present, and preserves `project.md`, `state.md`, custom project rules, and active tracking mode (`stealth` vs `track`). |
-| `--track` | **Git-Tracked Mode (Solo / Private Repos):** Removes harness exclusions from `.git/info/exclude` so you can commit and push `.context/` and rules to Git while keeping `.code-review-graph/` ignored. Re-run with `--stealth` anytime to hide again. |
-| `--force` | **Factory Reset:** Resets `.context/project.md` and `.context/state.md` back to blank templates (never overwrites custom project `AGENTS.md`/`CLAUDE.md`; preserves tracking mode). |
+| `(default)` / `--stealth` | Writes `.context/` and excludes harness files via `.git/info/exclude` (zero noise in `git status` / PRs). |
+| `--track` | Excludes only `.code-review-graph/` and keeps `.context/` + rules tracked in Git. |
+| `--upgrade` | Updates `AGENTS.md` (or `.agents/rules/coding-base.md`), `.context/verify-gate.sh`, and hooks; removes legacy files; scrubs stale `check-blast-radius.py` references from preserved `project.md`. |
+| `--force` | Resets `.context/project.md` and `.context/state.md` to blank templates (preserves custom rules & `rules-log.md`). |
 
-> **Note for non-Git folders:** You can inject into an empty folder before running `git init`. Once you run `git init` later, re-run `~/coding-base/inject.sh /path/to/your-project` so `.git/info/exclude` and the local `pre-commit` gatekeeper hook are wired up automatically.
+On first run in a project, `.context/project.md` starts as `STATUS: UNINITIALIZED`. Your agent fills in `VERIFY_CMD`, `GOVERNANCE_DOCS`, key paths, and flips it to `STATUS: READY`.
 
-### Option B — Ask Your AI Agent Directly
+## How the 3-Step Gatekeeper Works (`./.context/verify-gate.sh`)
 
-Paste this single prompt into Antigravity, Claude Code, Cursor, or Codex inside any target project:
+1. **`[1/3]` Tests & Active Plans:** Blocks `.skip`, `.only`, `@Disabled`, `pytest.mark.skip`, or empty `catch {}` in changed code tests; flags deleted assertions (`HIGH RISK`); blocks unchecked `- [ ]` items or unresolved `TC-xx` rows (`untested`/`fail`/`TBD`) in `APPROVED` / `IN_PROGRESS` plans under `.context/changes/` (delete temporary plan files once merged/done).
+2. **`[2/3]` Governance Log Sync:** When `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.agents/**`, `.claude/**`, `.cursor/rules/**`, `.context/project.md`, or `GOVERNANCE_DOCS` change, enforces a matching top entry in `.context/changes/rules-log.md` (skips Mode 0 onboarding & initial harness install).
+3. **`[3/3]` Project `VERIFY_CMD`:** Runs the exact `VERIFY_CMD` from `.context/project.md` (`typecheck && test && build`, `mvn test`, asset checks, etc.).
 
-```text
-Clone https://github.com/hkien2310/base-ai-coding-simple-flexible.git to ~/coding-base (or git pull if already cloned), run ~/coding-base/inject.sh on this workspace, and onboard .context/project.md.
-```
+Supports scoped parallel execution via `VERIFY_FILES="<paths>" VERIFY_SPEC="<slug|None>" ./.context/verify-gate.sh`.
 
----
+## Native Git Rollback
 
-## Per-File Rollback & Milestone Tags (Native Git)
-
-Native Git already tracks every commit `<sha>` and its immediate parent `<sha>~1` (the exact state *before* that commit). Combined with `[base: <sha>]` in `rules-log.md` and `Base Git Ref` in specs, you can inspect or restore any single file without touching the rest of your workspace:
+`rules-log.md` pairs `[base: <short-sha>]` anchors with standard Git commands — no shadow repo or sidecar database needed:
 
 ```bash
-# 1. Inspect the history of the file you want to roll back
-git log --oneline -n 10 -- path/to/file
-
-# 2. Preview differences (use <sha> for that commit's state, or <sha>~1 for state BEFORE <sha>)
-git diff <sha>~1 -- path/to/file
-
-# 3. Roll back ONLY that file (safe for stealth/excluded files too — never stages into .git/index)
-git restore --worktree --source=<sha>~1 -- path/to/file
-
-# 4. Optional milestone tag before big experiments (local bookmarks — never `git push --tags` on shared repos)
-git tag ckpt/ten-moc                   # Mark current commit
-git tag -l "ckpt/*"                    # List milestone tags
-git tag -d ckpt/ten-moc                # Delete local milestone tag when done
+git log --oneline -n 10 -- AGENTS.md .context/project.md   # Find exact commit
+git diff <ref> -- <file...>                                # Preview before restoring
+git restore --worktree --source=<ref> -- <file...>         # Restore specific file(s)
 ```
-
----
-
-## Workflow
-
-1. **One-Time Initialization (`Mode 0`):**
-   - **Brownfield (Existing Code):** Open the project and type `"onboard"`. The agent scans your stack, indexes the call graph (if available), and populates `.context/project.md` with your exact build/lint/test commands (`VERIFY_CMD`).
-   - **Greenfield (New Project):** Open the project and type `"bootstrap"`. The agent asks 2–4 pointed questions to lock down the stack and creates the initial MVP spec.
-2. **Daily Execution (`Mode 1` — 2-Lane Router):**
-   - **⚡ Fast Lane (≤ 3 files, zero external API/DTO contract changes):** Zero markdown paperwork. Edit code → write/update regression test → run `./.context/verify-gate.sh` → done.
-   - **🏗️ Spec Lane (> 3 files, horizontal domain coupling, or API/DTO/Cross-repo changes):** Draft `.context/changes/<slug>.md` with a `TC-xx` test contract → wait for `"ok"` → execute parallel waves → run Independent Adversarial Review → pass `./.context/verify-gate.sh`.
