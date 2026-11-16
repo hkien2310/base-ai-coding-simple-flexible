@@ -41,6 +41,8 @@ copy_state() {
 copy_engine() {
   if [[ -f "$2" && "$DO_UPGRADE" -eq 0 && "$DO_FORCE" -eq 0 ]]; then
     echo "⏭️  Skipped (already exists): $2 (use --upgrade to update)"
+  elif [[ -f "$2" && "$DO_FORCE" -eq 0 ]] && cmp -s "$1" "$2"; then
+    echo "⏭️  Unchanged: $2"
   else cp "$1" "$2"; echo "✅ Installed: $2"; fi
 }
 
@@ -52,23 +54,35 @@ elif [[ -f "$TARGET_DIR/AGENTS.md" ]] && ! head -n 1 "$TARGET_DIR/AGENTS.md" 2>/
 fi
 
 RULE_REL="AGENTS.md"; [[ "$HAS_CUSTOM_RULES" -eq 1 ]] && RULE_REL=".agents/rules/coding-base.md"
-RULE_SNAP=""; trap '[[ -n "$RULE_SNAP" ]] && rm -f "$RULE_SNAP"' EXIT
-if [[ -f "$TARGET_DIR/$RULE_REL" ]]; then RULE_SNAP="$(mktemp)"; cp "$TARGET_DIR/$RULE_REL" "$RULE_SNAP"; fi
+RULE_CHANGED=0; RULE_SAME=0
+RULE_TMP=""; trap '[[ -n "$RULE_TMP" ]] && rm -f "$RULE_TMP"' EXIT
 
 if [[ "$HAS_CUSTOM_RULES" -eq 1 ]]; then
   echo "ℹ️  Custom rules detected in $TARGET_DIR — installing additively (.agents/, .claude/, .cursor/)."
   mkdir -p "$TARGET_DIR/.agents/rules" "$TARGET_DIR/.claude/rules" "$TARGET_DIR/.cursor/rules"
-  { printf -- "---\ntrigger: always_on\ndescription: Universal Project Harness\nalwaysApply: true\n---\n\n"; cat "$BASE_DIR/AGENTS.md"; } > "$TARGET_DIR/.agents/rules/coding-base.md"
+  RULE_TMP="$(mktemp)"
+  { printf -- "---\ntrigger: always_on\ndescription: Universal Project Harness\nalwaysApply: true\n---\n\n"; cat "$BASE_DIR/AGENTS.md"; } > "$RULE_TMP"
+  if [[ -f "$TARGET_DIR/$RULE_REL" && "$DO_FORCE" -eq 0 ]] && cmp -s "$RULE_TMP" "$TARGET_DIR/$RULE_REL"; then
+    RULE_SAME=1
+    echo "⏭️  Unchanged: $TARGET_DIR/$RULE_REL"
+  elif [[ -f "$TARGET_DIR/$RULE_REL" && "$DO_UPGRADE" -eq 0 && "$DO_FORCE" -eq 0 ]]; then
+    echo "⏭️  Skipped (already exists): $TARGET_DIR/$RULE_REL (use --upgrade to update)"
+  else
+    [[ -f "$TARGET_DIR/$RULE_REL" ]] && RULE_CHANGED=1
+    cp "$RULE_TMP" "$TARGET_DIR/$RULE_REL"
+    echo "✅ Installed additive rule (AGY/Claude/Cursor): $TARGET_DIR/$RULE_REL"
+  fi
   ln -sf "../../.agents/rules/coding-base.md" "$TARGET_DIR/.claude/rules/coding-base.md"
   ln -sf "../../.agents/rules/coding-base.md" "$TARGET_DIR/.cursor/rules/coding-base.mdc"
-  echo "✅ Installed additive rule (AGY/Claude/Cursor): $TARGET_DIR/.agents/rules/coding-base.md"
 else
+  if [[ -f "$TARGET_DIR/AGENTS.md" ]] && cmp -s "$BASE_DIR/AGENTS.md" "$TARGET_DIR/AGENTS.md"; then
+    RULE_SAME=1
+  elif [[ -f "$TARGET_DIR/AGENTS.md" && ( "$DO_UPGRADE" -eq 1 || "$DO_FORCE" -eq 1 ) ]]; then
+    RULE_CHANGED=1
+  fi
   copy_engine "$BASE_DIR/AGENTS.md" "$TARGET_DIR/AGENTS.md"
   [[ ! -e "$TARGET_DIR/CLAUDE.md" ]] && { ln -s AGENTS.md "$TARGET_DIR/CLAUDE.md"; echo "🔗 Linked: $TARGET_DIR/CLAUDE.md -> AGENTS.md"; }
 fi
-
-RULE_CHANGED=0
-[[ -n "$RULE_SNAP" ]] && ! cmp -s "$RULE_SNAP" "$TARGET_DIR/$RULE_REL" && RULE_CHANGED=1
 
 rm -f "$TARGET_DIR/.context/changes/commit-log.md" "$TARGET_DIR/.context/changes/_TEMPLATE.md" "$TARGET_DIR/.context/check-blast-radius.py" "$TARGET_DIR/.context/checkpoint.sh"
 rm -rf "$TARGET_DIR/.context/__pycache__"
@@ -84,7 +98,7 @@ else EFFECTIVE_MODE="stealth"; fi
 
 TARGET_DIR="$TARGET_DIR" EXCLUDE_FILE="$EXCLUDE_FILE" EFFECTIVE_MODE="$EFFECTIVE_MODE" \
 HAS_CUSTOM_RULES="$HAS_CUSTOM_RULES" HAD_CONTEXT="$HAD_CONTEXT" RULE_REL="$RULE_REL" \
-RULE_CHANGED="$RULE_CHANGED" DO_FORCE="$DO_FORCE" python3 - <<'PY'
+RULE_CHANGED="$RULE_CHANGED" RULE_SAME="$RULE_SAME" DO_FORCE="$DO_FORCE" python3 - <<'PY'
 import datetime, os, re, subprocess
 from pathlib import Path
 
@@ -195,6 +209,12 @@ if os.environ["HAD_CONTEXT"] == "1" and mode == "track" and (os.environ["RULE_CH
     entry = f"- [{now_s}] [base: {base_sha}] {', '.join(targets)}{suffix} | Why: sync latest coding-base harness | Rejected/Replaces: previous coding-base version"
     dec_path.write_text("\n".join([header, "", entry] + rest) + "\n", encoding="utf-8")
     print(f"📝 Prepended governance upgrade entry to: {dec_path}")
+
+rule_p = repo / os.environ["RULE_REL"]
+if os.environ.get("RULE_SAME") == "1" and dec_path.is_file() and rule_p.is_file() and not rule_p.is_symlink():
+    dm = dec_path.stat().st_mtime
+    if rule_p.stat().st_mtime > dm:
+        os.utime(rule_p, (dm, dm))
 
 # 4. Sync .git/info/exclude
 excl_raw = os.environ.get("EXCLUDE_FILE", "").strip()
