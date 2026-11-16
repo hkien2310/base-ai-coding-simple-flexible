@@ -5,7 +5,7 @@
 | `none` | — | `IDLE` | — | Awaiting user task |
 
 ## Last Handoff
-- Initialized harness; no completed session yet.
+- Added post-edit `mtime` freshness check across Git, unborn-HEAD, and non-Git workspaces in `verify-gate.sh` step `[2/3]`, updated `T1`–`T10` E2E tests, and synced all 8 target repositories.
 
 ## Open Blockers / Pending Ops
 - None

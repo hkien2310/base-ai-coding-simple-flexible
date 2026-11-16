@@ -32,7 +32,7 @@ On first run, `.context/project.md` starts with `STATUS: UNINITIALIZED`. Populat
 ## 3-Step Gatekeeper (`./.context/verify-gate.sh`)
 
 1. **`[1/3]` Tests & Active Plans:** Blocks `.skip`, `.only`, `@Disabled`, `pytest.mark.skip`, or empty `catch {}` in changed code tests; warns on deleted assertions; blocks incomplete `- [ ]` items or unresolved `TC-xx` rows (`untested`/`fail`/`TBD`) in `APPROVED`/`IN_PROGRESS` plans under `.context/plans/`.
-2. **`[2/3]` Governance & Decisions Log Sync:** Requires a matching top ADR entry in `.context/decisions.md` when `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.agents/**`, `.claude/**`, `.cursor/rules/**`, `.context/project.md`, or `GOVERNANCE_DOCS` change (skips Mode 0 onboarding and initial install).
+2. **`[2/3]` Governance & Decisions Log Sync:** Enforces via Git diff and file `mtime` (covering multi-round uncommitted edits and non-Git folders) that `.context/decisions.md` is updated last with a matching top ADR entry whenever `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.agents/**`, `.claude/**`, `.cursor/rules/**`, `.context/project.md`, or `GOVERNANCE_DOCS` change (skips Mode 0 onboarding and initial install).
 3. **`[3/3]` Project `VERIFY_CMD`:** Runs `VERIFY_CMD` from `.context/project.md`.
 
 The installed `pre-commit` hook runs `VERIFY_STAGED=1 ./.context/verify-gate.sh` to validate staged files without failing on unrelated unstaged WIP. Scope manual runs with `VERIFY_FILES="<paths>" VERIFY_SPEC="<slug|None>" ./.context/verify-gate.sh`.

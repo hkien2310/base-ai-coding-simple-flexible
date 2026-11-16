@@ -123,29 +123,39 @@ for spec in target_specs:
         print(f"{GREEN}✅ Active Plan ({spec}) has zero incomplete items.{NC}")
 
 print("🔍 [2/3] Checking Governance & Decisions Log (.context/decisions.md) Sync...")
+RULES_LOG = ".context/decisions.md"
+EXACT_GOV = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".context/project.md"}
+PREFIX_GOV = (".agents/", ".claude/", ".cursor/rules/")
+HARNESS_INSTALL = {"AGENTS.md", "CLAUDE.md", ".context/project.md", ".agents/rules/coding-base.md", ".claude/rules/coding-base.md", ".cursor/rules/coding-base.mdc"}
+in_head = lambda p: has_head and git_out(["cat-file", "-e", f"HEAD:{p}"])[0] == 0
+is_junk = lambda p: "__pycache__/" in p or p.endswith((".pyc", ".pyo", ".DS_Store"))
+vf_raw = os.environ.get("VERIFY_FILES", "").strip()
+vf_allow = {re.sub(r"^\./+", "", x.strip()) for x in re.split(r"[\s,]+", vf_raw) if x.strip()} if vf_raw else None
+
+proj_txt = read_ctx(".context/project.md") or ""
+gov_patterns = []
+gov_re = re.compile(r"^\s*(?:[-*]\s+)?[*`]*GOVERNANCE_DOCS[*`]*(?:\s*\([^)\n\r]*\))?[*`]*\s*:\**\s*(.*)$")
+for ln in proj_txt.splitlines():
+    if m := gov_re.match(ln):
+        rest = re.sub(r"\s+\([^)]*\)\s*$", "", m.group(1).strip())
+        items = [x for span in re.findall(r"`([^`]+)`", rest) for x in span.split(",")] if "`" in rest else rest.split(",")
+        gov_patterns = [c for raw in items if (c := re.sub(r"^\./+", "", raw.strip().strip("'\""))) and c.upper() not in ("TBD", "NONE") and c not in ("*", "**")]
+        break
+
+entry_re = re.compile(r"^-\s*\[\d{4}-\d{2}-\d{2}")
+ts_re = re.compile(r"^-\s*\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\]")
+msg = "Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha|unborn>] <scope/file(s)> — <decision/change> | Why: <reason> | Rejected/Replaces: <old|None>"
+log_txt = read_ctx(RULES_LOG)
+entries = [ln.strip() for ln in log_txt.splitlines() if entry_re.match(ln.strip())] if log_txt is not None else []
+has_real_entries = any("Upgraded coding-base harness engine via inject.sh" not in e for e in entries)
+
 if is_git and scoped_files:
-    RULES_LOG = ".context/decisions.md"
-    EXACT_GOV = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".context/project.md"}
-    PREFIX_GOV = (".agents/", ".claude/", ".cursor/rules/")
-    HARNESS_INSTALL = {"AGENTS.md", "CLAUDE.md", ".context/project.md", ".agents/rules/coding-base.md", ".claude/rules/coding-base.md", ".cursor/rules/coding-base.mdc"}
-    in_head = lambda p: has_head and git_out(["cat-file", "-e", f"HEAD:{p}"])[0] == 0
-
-    proj_txt = read_ctx(".context/project.md") or ""
-    gov_patterns = []
-    gov_re = re.compile(r"^\s*(?:[-*]\s+)?[*`]*GOVERNANCE_DOCS[*`]*(?:\s*\([^)\n\r]*\))?[*`]*\s*:\**\s*(.*)$")
-    for ln in proj_txt.splitlines():
-        if m := gov_re.match(ln):
-            rest = re.sub(r"\s+\([^)]*\)\s*$", "", m.group(1).strip())
-            items = [x for span in re.findall(r"`([^`]+)`", rest) for x in span.split(",")] if "`" in rest else rest.split(",")
-            gov_patterns = [c for raw in items if (c := re.sub(r"^\./+", "", raw.strip().strip("'\""))) and c.upper() not in ("TBD", "NONE") and c not in ("*", "**")]
-            break
-
     init_install = (".context/project.md" in scoped_files) and not in_head(".context/project.md")
     proj_diff = git_diff(".context/project.md") if ".context/project.md" in scoped_files else ""
     mode0 = bool(re.search(r"^-\s*STATUS:\s*UNINITIALIZED\b", proj_diff, re.M) and re.search(r"^\+\s*STATUS:\s*READY\b", proj_diff, re.M))
 
     def is_gov(p):
-        if p in (RULES_LOG, ".context/changes/rules-log.md") or p.startswith(".agents/teamwork/") or (init_install and p in HARNESS_INSTALL and not in_head(p)):
+        if p in (RULES_LOG, ".context/changes/rules-log.md") or p.startswith(".agents/teamwork/") or is_junk(p) or (init_install and p in HARNESS_INSTALL and not in_head(p)):
             return False
         if p in EXACT_GOV or p.startswith(PREFIX_GOV):
             return not (p == ".context/project.md" and mode0)
@@ -154,17 +164,12 @@ if is_git and scoped_files:
     norm_files = [re.sub(r"^\./+", "", f) for f in scoped_files]
     modified_gov = [f for f in norm_files if is_gov(f)]
     if modified_gov:
-        log_txt = read_ctx(RULES_LOG)
         if log_txt is None:
             print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) but {RULES_LOG} does not exist!{NC}")
             failed = True
         else:
-            entry_re = re.compile(r"^-\s*\[\d{4}-\d{2}-\d{2}")
-            ts_re = re.compile(r"^-\s*\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\]")
-            entries = [ln.strip() for ln in log_txt.splitlines() if entry_re.match(ln.strip())]
             top = entries[0] if entries else ""
             mentions = lambda ln, gp: bool(re.search(rf"(?<![\w./-]){re.escape(gp)}(?![\w./-])|(?<![\w./-]){re.escape(os.path.basename(gp))}(?![\w./-])", ln))
-            msg = "Expected top entry: - [YYYY-MM-DD HH:MM] [base: <short-sha|unborn>] <scope/file(s)> — <decision/change> | Why: <reason> | Rejected/Replaces: <old|None>"
 
             if git_out(["ls-files", "--error-unmatch", "--", RULES_LOG])[0] == 0:
                 added = [ln[1:].strip() for ln in git_diff(RULES_LOG, unified0=True).splitlines() if ln.startswith("+") and not ln.startswith("+++") and entry_re.match(ln[1:].strip())]
@@ -202,6 +207,51 @@ if is_git and scoped_files:
                     if not all(covered(gf) for gf in modified_gov):
                         print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}\n{msg}")
                         failed = True
+
+        if not failed and not verify_staged and os.path.isfile(RULES_LOG):
+            log_mtime_f = os.path.getmtime(RULES_LOG)
+            newer_gov = [gf for gf in modified_gov if os.path.isfile(gf) and not os.path.islink(gf) and os.path.getmtime(gf) > log_mtime_f + 5.0]
+            if newer_gov:
+                print(f"{RED}❌ [FATAL] Governance file(s) ({', '.join(newer_gov)}) were modified after {RULES_LOG}; prepend or update the top entry in {RULES_LOG} after finishing governance edits!{NC}\n{msg}")
+                failed = True
+
+if not failed and not verify_staged and (not is_git or not has_head):
+    cands = {p for p in EXACT_GOV if os.path.isfile(p) and not os.path.islink(p)}
+    for base_d in (".agents", ".claude", ".cursor/rules"):
+        if os.path.isdir(base_d) and not os.path.islink(base_d):
+            for root, dirs, files in os.walk(base_d):
+                dirs[:] = [d for d in dirs if d != "__pycache__" and not (root == ".agents" and d == "teamwork")]
+                for fn in files:
+                    fp = os.path.join(root, fn)
+                    rel = re.sub(r"^\./+", "", fp.replace(os.sep, "/"))
+                    if os.path.isfile(fp) and not os.path.islink(fp) and not is_junk(rel):
+                        cands.add(rel)
+    for pat in gov_patterns:
+        gpat = pat.rstrip("/") + "/**" if pat.endswith("/") else pat
+        for fp in glob.glob(gpat, recursive=True):
+            rel = re.sub(r"^\./+", "", fp.replace(os.sep, "/"))
+            if os.path.isfile(fp) and not os.path.islink(fp) and not is_junk(rel):
+                cands.add(rel)
+    cands -= {RULES_LOG, ".context/changes/rules-log.md"}
+    if not has_real_entries:
+        cands -= HARNESS_INSTALL
+    if is_git:
+        cands &= {re.sub(r"^\./+", "", f) for f in scoped_files}
+    if vf_allow is not None:
+        cands &= vf_allow
+    if cands:
+        if log_txt is None:
+            print(f"{RED}❌ [FATAL] Governance file(s) exist ({', '.join(sorted(cands))}) but {RULES_LOG} does not exist!{NC}")
+            failed = True
+        elif len([l for l in log_txt.splitlines() if l.strip()]) > 1 and not entries:
+            print(f"{RED}❌ [FATAL] {RULES_LOG} contains text but no valid ADR entries!{NC}\n{msg}")
+            failed = True
+        elif os.path.isfile(RULES_LOG):
+            log_mtime_f = os.path.getmtime(RULES_LOG)
+            newer_ng = sorted(gf for gf in cands if os.path.getmtime(gf) > log_mtime_f + 5.0)
+            if newer_ng:
+                print(f"{RED}❌ [FATAL] Governance file(s) ({', '.join(newer_ng)}) were modified after {RULES_LOG}; prepend or update the top entry in {RULES_LOG} after finishing governance edits!{NC}\n{msg}")
+                failed = True
 
 print("🔍 [3/3] Running Project VERIFY_CMD from .context/project.md...")
 if (proj_cmd_txt := read_ctx(".context/project.md")) is not None:
