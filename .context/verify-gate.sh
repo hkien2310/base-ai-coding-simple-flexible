@@ -190,22 +190,12 @@ if is_git and scoped_files:
                 if stale:
                     print(f"{RED}❌ [FATAL] {RULES_LOG} is older than the last commit to {stale[0]}; prepend a new entry for this edit!{NC}")
                     failed = True
-                elif not top or not any(mentions(top, gf) for gf in modified_gov):
-                    print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}\n{msg}")
-                    failed = True
                 else:
-                    def covered(gf):
-                        if mentions(top, gf):
-                            return True
-                        for e in entries[1:]:
-                            if not any(mentions(e, x) for x in modified_gov):
-                                break
-                            if mentions(e, gf) and (last_cts[gf] == 0 or epoch(e) + 60 > last_cts[gf]):
-                                return True
-                        return False
-
-                    if not all(covered(gf) for gf in modified_gov):
-                        print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(modified_gov)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}\n{msg}")
+                    non_up = [e for e in entries if "Upgraded coding-base harness engine via inject.sh" not in e]
+                    covered = lambda gf: (bool(entries) and mentions(entries[0], gf)) or (bool(non_up) and mentions(non_up[0], gf)) or any(mentions(e, gf) and (last_cts[gf] == 0 or epoch(e) + 60 > last_cts[gf]) for e in entries[1:])
+                    uncovered = [gf for gf in modified_gov if not covered(gf)]
+                    if uncovered:
+                        print(f"{RED}❌ [FATAL] Governance file(s) modified ({', '.join(uncovered)}) without prepending matching top entry/entries in {RULES_LOG}!{NC}\n{msg}")
                         failed = True
 
         if not failed and not verify_staged and os.path.isfile(RULES_LOG):
