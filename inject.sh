@@ -34,9 +34,9 @@ if git -C "$TARGET_DIR" rev-parse --git-common-dir >/dev/null 2>&1; then
 fi
 
 mkdir -p "$TARGET_DIR/.context"
-copy_state() {
-  if [[ -f "$2" && "$DO_FORCE" -eq 0 ]]; then echo "⏭️  Preserved: $2"
-  else cp "$1" "$2"; echo "✅ Installed: $2"; fi
+write_state() {
+  if [[ -f "$1" && "$DO_FORCE" -eq 0 ]]; then cat >/dev/null; echo "⏭️  Preserved: $1"
+  else cat > "$1"; echo "✅ Installed: $1"; fi
 }
 copy_engine() {
   if [[ -f "$2" && "$DO_UPGRADE" -eq 0 && "$DO_FORCE" -eq 0 ]]; then
@@ -87,8 +87,37 @@ fi
 rm -f "$TARGET_DIR/.context/changes/commit-log.md" "$TARGET_DIR/.context/changes/_TEMPLATE.md" "$TARGET_DIR/.context/check-blast-radius.py" "$TARGET_DIR/.context/checkpoint.sh"
 rm -rf "$TARGET_DIR/.context/__pycache__"
 
-copy_state "$BASE_DIR/.context/project.md" "$TARGET_DIR/.context/project.md"
-copy_state "$BASE_DIR/.context/state.md" "$TARGET_DIR/.context/state.md"
+write_state "$TARGET_DIR/.context/project.md" <<'EOF'
+# Project Context — <PROJECT_NAME>
+STATUS: UNINITIALIZED
+
+## Stack, Structure & Rules
+- **Domain & Stack:** `<Language / Framework / Pipeline / Content Type>`
+- **Key Paths & Flow:** `<entry points, core dirs/templates, or request flow>`
+- **CROSS_REPO_CONSUMERS:** `None`
+- **GOVERNANCE_DOCS:** `None`
+
+## Verification
+- **VERIFY_CMD:** `bash -n .context/verify-gate.sh`
+- **Live / Manual Check:** `<API curl / browser / asset & schema check>`
+
+## Error Memory & Red Lines
+- None yet (append 1 line per real pitfall or user correction).
+EOF
+
+write_state "$TARGET_DIR/.context/state.md" <<'EOF'
+# Session State & Handoff
+
+| Session / Task | Lane (Fast\|Plan) | Stage (PLAN\|EXEC\|READY\|IDLE) | Locked / Touched Files | Next Action |
+| :--- | :--- | :--- | :--- | :--- |
+| `none` | — | `IDLE` | — | Awaiting user task |
+
+## Last Handoff
+- Initialized harness; no completed session yet.
+
+## Open Blockers / Pending Ops
+- None
+EOF
 copy_engine "$BASE_DIR/.context/verify-gate.sh" "$TARGET_DIR/.context/verify-gate.sh"
 chmod +x "$TARGET_DIR/.context/verify-gate.sh"
 

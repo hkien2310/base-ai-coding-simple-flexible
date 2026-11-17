@@ -9,6 +9,7 @@ coding-base/
 ├── AGENTS.md                 # 3-layer source-tree rules, Single-File ADR, 2-lane router
 ├── CLAUDE.md -> AGENTS.md    # Symlink for Claude Code compatibility
 ├── inject.sh                 # Installer / upgrader (--stealth default, --track, --upgrade, --force)
+├── tests/test_harness.py     # E2E regression suite (T1–T10) for inject.sh & verify-gate.sh
 └── .context/
     ├── project.md            # Static truth: stack, VERIFY_CMD, GOVERNANCE_DOCS, Error Memory
     ├── state.md              # Session progress: Active table, Last Handoff (1–3 bullets), Open Blockers

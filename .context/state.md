@@ -5,7 +5,7 @@
 | `none` | — | `IDLE` | — | Awaiting user task |
 
 ## Last Handoff
-- Added post-edit `mtime` freshness check across Git, unborn-HEAD, and non-Git workspaces in `verify-gate.sh` step `[2/3]`, updated `T1`–`T10` E2E tests, and synced all 8 target repositories.
+- Embedded blank `project.md` and `state.md` templates in `inject.sh` (`write_state`), moved the `T1`–`T10` E2E suite into `tests/test_harness.py`, and set `.context/project.md` to `STATUS: READY` with E2E `VERIFY_CMD`.
 
 ## Open Blockers / Pending Ops
 - None
